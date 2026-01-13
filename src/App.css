@@ -8,11 +8,19 @@
   color: #e8eefc;
 }
 
+/* ===== Topbar (updated for Hide/Show button) ===== */
 .topbar {
-  padding: 16px 18px;
+  padding: 14px 14px;
   border-bottom: 1px solid rgba(255, 255, 255, 0.08);
   background: rgba(255,255,255,0.02);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
 }
+
+.topbarLeft { min-width: 0; }
+.topbarRight { display: flex; gap: 10px; }
 
 .brand {
   font-size: 18px;
@@ -25,15 +33,28 @@
   opacity: 0.8;
 }
 
+/* ===== Layout (bigger right-side usage + hide-left mode) ===== */
 .layout {
   display: grid;
   grid-template-columns: 460px 1fr;
-  gap: 14px;
-  padding: 14px;
+  gap: 12px;
+  padding: 10px;              /* less padding = more usable space */
+  height: calc(100vh - 72px); /* main working area height */
+}
+
+.layoutFull {
+  grid-template-columns: 1fr; /* when left is hidden */
 }
 
 .left, .right { min-width: 0; }
 
+.right {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* ===== Cards / Inputs ===== */
 .card {
   background: rgba(255,255,255,0.03);
   border: 1px solid rgba(255,255,255,0.08);
@@ -115,6 +136,7 @@
   font-size: 12px;
 }
 
+/* ===== History table ===== */
 .empty {
   font-size: 12px;
   opacity: 0.8;
@@ -191,11 +213,12 @@
   color: #ffb3b3;
 }
 
+/* ===== Compare header (less padding = more PDF space) ===== */
 .compareHeader {
   display: flex;
   align-items: baseline;
   justify-content: space-between;
-  padding: 8px 6px 12px 6px;
+  padding: 6px 2px 8px 2px;
 }
 
 .compareTitle {
@@ -209,11 +232,12 @@
   margin-left: 10px;
 }
 
+/* ===== Bigger PDF viewers ===== */
 .pdfGrid {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 14px;
-  height: calc(100vh - 160px);
+  gap: 12px;
+  height: calc(100vh - 130px); /* bigger than before */
 }
 
 .pdfPane {
@@ -273,15 +297,18 @@
   opacity: 0.75;
 }
 
+/* Footer can stay, but this layout is already using most space */
 .footer {
   padding: 10px 14px 14px;
   font-size: 12px;
   opacity: 0.7;
 }
 
+/* ===== Responsive ===== */
 @media (max-width: 1150px) {
   .layout {
     grid-template-columns: 1fr;
+    height: auto;
   }
   .pdfGrid {
     grid-template-columns: 1fr;
