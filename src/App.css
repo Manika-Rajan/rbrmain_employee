@@ -1,42 +1,290 @@
-#root {
-  max-width: 1280px;
-  margin: 0 auto;
-  padding: 2rem;
-  text-align: center;
+:root {
+  font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif;
 }
 
-.logo {
-  height: 6em;
-  padding: 1.5em;
-  will-change: filter;
-  transition: filter 300ms;
-}
-.logo:hover {
-  filter: drop-shadow(0 0 2em #646cffaa);
-}
-.logo.react:hover {
-  filter: drop-shadow(0 0 2em #61dafbaa);
+.page {
+  min-height: 100vh;
+  background: #0b0f19;
+  color: #e8eefc;
 }
 
-@keyframes logo-spin {
-  from {
-    transform: rotate(0deg);
-  }
-  to {
-    transform: rotate(360deg);
-  }
+.topbar {
+  padding: 16px 18px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255,255,255,0.02);
 }
 
-@media (prefers-reduced-motion: no-preference) {
-  a:nth-of-type(2) .logo {
-    animation: logo-spin infinite 20s linear;
-  }
+.brand {
+  font-size: 18px;
+  font-weight: 700;
 }
+
+.sub {
+  margin-top: 4px;
+  font-size: 12px;
+  opacity: 0.8;
+}
+
+.layout {
+  display: grid;
+  grid-template-columns: 460px 1fr;
+  gap: 14px;
+  padding: 14px;
+}
+
+.left, .right { min-width: 0; }
 
 .card {
-  padding: 2em;
+  background: rgba(255,255,255,0.03);
+  border: 1px solid rgba(255,255,255,0.08);
+  border-radius: 14px;
+  padding: 14px;
 }
 
-.read-the-docs {
-  color: #888;
+.cardTitle {
+  font-weight: 700;
+  margin-bottom: 12px;
+}
+
+.label {
+  display: block;
+  font-size: 12px;
+  opacity: 0.85;
+  margin-bottom: 6px;
+}
+
+.input, .textarea {
+  width: 100%;
+  box-sizing: border-box;
+  background: rgba(0,0,0,0.25);
+  border: 1px solid rgba(255,255,255,0.12);
+  color: #e8eefc;
+  border-radius: 10px;
+  padding: 10px 10px;
+  outline: none;
+}
+
+.textarea {
+  resize: vertical;
+}
+
+.actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.btn {
+  background: #2d6cff;
+  border: none;
+  color: white;
+  padding: 10px 12px;
+  border-radius: 10px;
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.btn:disabled { opacity: 0.6; cursor: not-allowed; }
+
+.btnSecondary {
+  background: rgba(255,255,255,0.08);
+  border: 1px solid rgba(255,255,255,0.12);
+  color: #e8eefc;
+  padding: 10px 12px;
+  border-radius: 10px;
+  cursor: pointer;
+}
+
+.apiLine {
+  margin-top: 10px;
+  font-size: 12px;
+  opacity: 0.9;
+  word-break: break-all;
+}
+
+.apiLabel { opacity: 0.7; }
+.apiValue { opacity: 0.95; }
+
+.errorBox {
+  margin-top: 10px;
+  padding: 10px;
+  border-radius: 10px;
+  background: rgba(255, 80, 80, 0.12);
+  border: 1px solid rgba(255, 80, 80, 0.25);
+  color: #ffb3b3;
+  font-size: 12px;
+}
+
+.empty {
+  font-size: 12px;
+  opacity: 0.8;
+  padding: 10px 0;
+}
+
+.tableWrap {
+  overflow: auto;
+  max-height: 42vh;
+  border-radius: 12px;
+  border: 1px solid rgba(255,255,255,0.08);
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+  background: rgba(0,0,0,0.18);
+}
+
+.table th, .table td {
+  text-align: left;
+  padding: 10px;
+  border-bottom: 1px solid rgba(255,255,255,0.08);
+  vertical-align: top;
+}
+
+.table th {
+  position: sticky;
+  top: 0;
+  background: rgba(12, 16, 30, 0.95);
+  z-index: 1;
+}
+
+.rowSelected {
+  background: rgba(45, 108, 255, 0.12);
+}
+
+.titleCell {
+  font-weight: 700;
+}
+
+.mutedSmall {
+  font-size: 11px;
+  opacity: 0.7;
+  margin-top: 3px;
+}
+
+.mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: 11px;
+}
+
+.rowActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.chip, .chipDanger, .chipLink {
+  border-radius: 999px;
+  padding: 6px 10px;
+  font-size: 12px;
+  cursor: pointer;
+  border: 1px solid rgba(255,255,255,0.12);
+  background: rgba(255,255,255,0.06);
+  color: #e8eefc;
+  text-decoration: none;
+}
+
+.chipDanger {
+  background: rgba(255, 80, 80, 0.12);
+  border: 1px solid rgba(255, 80, 80, 0.25);
+  color: #ffb3b3;
+}
+
+.compareHeader {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  padding: 8px 6px 12px 6px;
+}
+
+.compareTitle {
+  font-size: 16px;
+  font-weight: 700;
+}
+
+.compareHint {
+  font-size: 12px;
+  opacity: 0.75;
+  margin-left: 10px;
+}
+
+.pdfGrid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+  height: calc(100vh - 160px);
+}
+
+.pdfPane {
+  background: rgba(255,255,255,0.03);
+  border: 1px solid rgba(255,255,255,0.08);
+  border-radius: 14px;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.pdfPaneHeader {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border-bottom: 1px solid rgba(255,255,255,0.08);
+  background: rgba(255,255,255,0.02);
+}
+
+.paneTitle {
+  font-weight: 800;
+  width: 42px;
+}
+
+.paneMeta {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.dot { margin: 0 8px; opacity: 0.6; }
+
+.openBtn {
+  background: rgba(255,255,255,0.08);
+  border: 1px solid rgba(255,255,255,0.12);
+  color: #e8eefc;
+  padding: 6px 10px;
+  border-radius: 10px;
+  text-decoration: none;
+  font-size: 12px;
+}
+
+.pdfFrame {
+  width: 100%;
+  height: 100%;
+  border: 0;
+  background: #111;
+}
+
+.pdfEmpty {
+  padding: 14px;
+  font-size: 12px;
+  opacity: 0.75;
+}
+
+.footer {
+  padding: 10px 14px 14px;
+  font-size: 12px;
+  opacity: 0.7;
+}
+
+@media (max-width: 1150px) {
+  .layout {
+    grid-template-columns: 1fr;
+  }
+  .pdfGrid {
+    grid-template-columns: 1fr;
+    height: auto;
+  }
 }
