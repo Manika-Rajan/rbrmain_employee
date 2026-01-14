@@ -55,18 +55,18 @@ function buildErrorMessage(res, data, fallback) {
     data?.error ||
     data?.message ||
     data?.details ||
-    (typeof data?.raw === "string" && data.raw.slice(0, 200)) ||
+    (typeof data?.raw === "string" && data.raw.slice(0, 300)) ||
     fallback;
 
   return base || fallback || `HTTP ${res?.status || "error"}`;
 }
 
+// IMPORTANT: Use fragment buster only (never add query params to presigned URL)
 function withFragmentBuster(url) {
   if (!url) return url;
   const base = url.split("#")[0]; // strip existing fragment if any
   return `${base}#ts=${Date.now()}`;
 }
-
 
 export default function App() {
   // ENV (set these in Amplify env vars)
@@ -86,15 +86,25 @@ export default function App() {
   const [rightId, setRightId] = useState(null);
   const [leftHidden, setLeftHidden] = useState(false);
 
-  // Fancy modal state
+  // Modal state
   const [modalOpen, setModalOpen] = useState(false);
   const [modalTitle, setModalTitle] = useState("Generating report…");
   const [modalSub, setModalSub] = useState("Initializing…");
   const [progressPct, setProgressPct] = useState(5);
 
-  // current job ref (avoid stale closures)
-  const jobRef = useRef(null);
+  // Avoid setState after unmount
+  const mountedRef = useRef(true);
+
+  // Poll cancel flag
   const pollAbortRef = useRef({ aborted: false });
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      pollAbortRef.current.aborted = true;
+    };
+  }, []);
 
   useEffect(() => {
     saveHistory(history);
@@ -151,13 +161,16 @@ export default function App() {
     const startedAt = Date.now();
     pollAbortRef.current.aborted = false;
 
+    if (!mountedRef.current) return null;
+
     setModalOpen(true);
     setModalTitle("Generating report…");
     setModalSub("Queued. Starting worker…");
     setProgressPct(8);
 
-    // smooth-ish progress animation up to 92%
+    // Smooth progress animation up to 92%
     const timer = setInterval(() => {
+      if (!mountedRef.current) return;
       setProgressPct((p) => {
         if (p >= 92) return p;
         return Math.min(92, p + 1);
@@ -166,11 +179,9 @@ export default function App() {
 
     try {
       while (Date.now() - startedAt < MAX_WAIT_MS) {
-        if (pollAbortRef.current.aborted) {
-          throw new Error("Polling aborted");
-        }
+        if (!mountedRef.current) throw new Error("Page closed");
+        if (pollAbortRef.current.aborted) throw new Error("Polling aborted");
 
-        // GET /status?userPhone=...&instantId=...
         const url = new URL(STATUS_API);
         url.searchParams.set("userPhone", userPhone);
         url.searchParams.set("instantId", instantId);
@@ -180,32 +191,35 @@ export default function App() {
           headers: { "Content-Type": "application/json" },
         });
 
+        if (!mountedRef.current) throw new Error("Page closed");
+
         setLastApiResponse(data);
 
         if (!res.ok || !data?.ok) {
           throw new Error(buildErrorMessage(res, data, "Status check failed"));
         }
 
-        const status = (data.status || "").toLowerCase();
+        const status = String(data.status || "").toLowerCase();
         const errMsg = data.error || data.details || "";
 
-        // reflect status in UI/history
         upsertHistoryItem(historyId, {
           status: data.status || "unknown",
           statusResponse: data,
+          s3Key: data.s3Key || data.s3_key || "",
+          title: data.title || undefined,
+          subtitle: data.subtitle || undefined,
         });
 
         if (status === "done") {
           setModalSub("Finalizing… preparing download link");
           setProgressPct(95);
-          return data; // contains s3Key sometimes, depending on your status lambda
+          return data;
         }
 
         if (status === "failed") {
           throw new Error(errMsg || "Report generation failed");
         }
 
-        // still queued/running
         setModalSub(
           status === "running"
             ? "Generating content and charts…"
@@ -216,7 +230,9 @@ export default function App() {
       }
 
       throw new Error(
-        `Still running after ${Math.round(MAX_WAIT_MS / 1000)}s. Please wait and try again.`
+        `Still running after ${Math.round(
+          MAX_WAIT_MS / 1000
+        )}s. Please wait and try again.`
       );
     } finally {
       clearInterval(timer);
@@ -224,9 +240,9 @@ export default function App() {
   }
 
   async function getPresignedUrl({ userPhone, instantId, s3Key }) {
-    // Use GET /presign?s3Key=... (preferred) else userPhone+instantId
     const url = new URL(PRESIGN_API);
 
+    // Prefer s3Key if available (cleanest)
     if (s3Key) {
       url.searchParams.set("s3Key", s3Key);
     } else {
@@ -239,16 +255,28 @@ export default function App() {
       headers: { "Content-Type": "application/json" },
     });
 
-    if (!res.ok || !data?.ok) {
-      throw new Error(buildErrorMessage(res, data, "Presign failed"));
-    }
+    if (!res.ok) throw new Error(buildErrorMessage(res, data, "Presign failed"));
 
-    return data.presignedUrl || data.presigned_url || "";
+    // Accept multiple response shapes (since lambdas often differ)
+    // If your presign lambda returns { ok:true, presignedUrl:"..." } you’re covered.
+    const ok = data?.ok;
+    if (ok === false) throw new Error(buildErrorMessage(res, data, "Presign failed"));
+
+    const u =
+      data?.presignedUrl ||
+      data?.presigned_url ||
+      data?.url ||
+      data?.presignedURL ||
+      "";
+
+    if (!u) throw new Error("Presign API returned no URL");
+    return u;
   }
 
   async function generate() {
     setError("");
     setLastApiResponse(null);
+    pollAbortRef.current.aborted = true; // stop any previous polling loops
 
     if (!ensureEnv()) return;
 
@@ -319,8 +347,6 @@ export default function App() {
       setRightId((prevRight) => leftId || prevRight);
       setLeftId(historyId);
 
-      jobRef.current = { userPhone, instantId, historyId };
-
       // 2) Poll status until done
       const statusData = await pollStatusUntilDone({
         userPhone,
@@ -328,12 +354,15 @@ export default function App() {
         historyId,
       });
 
+      // If polling returned nothing (unmounted), just stop
+      if (!statusData || !mountedRef.current) return;
+
       const finalS3Key =
         statusData?.s3Key ||
         statusData?.s3_key ||
         `instant/${userPhone}/${instantId}.pdf`;
 
-      // 3) Get presigned URL
+      // 3) Presign
       const presignedUrl = await getPresignedUrl({
         userPhone,
         instantId,
@@ -346,19 +375,23 @@ export default function App() {
         status: "done",
         s3Key: finalS3Key,
         pdfUrl: finalUrl,
+        title: statusData.title || undefined,
+        subtitle: statusData.subtitle || undefined,
       });
 
       setModalSub("Ready!");
       setProgressPct(100);
 
-      // close modal after a short moment
       setTimeout(() => {
+        if (!mountedRef.current) return;
         setModalOpen(false);
       }, 600);
     } catch (e) {
+      if (!mountedRef.current) return;
       setModalOpen(false);
       setError(e?.message || "Server error");
     } finally {
+      if (!mountedRef.current) return;
       setLoading(false);
     }
   }
@@ -415,14 +448,17 @@ export default function App() {
               <div className="progressBar">
                 <div
                   className="progressFill"
-                  style={{ width: `${Math.max(0, Math.min(100, progressPct))}%` }}
+                  style={{
+                    width: `${Math.max(0, Math.min(100, progressPct))}%`,
+                  }}
                 />
               </div>
               <div className="progressPct">{progressPct}%</div>
             </div>
 
             <div className="modalHint">
-              This can take up to ~2 minutes because charts + PDF are generated in the worker.
+              This can take up to ~2 minutes because charts + PDF are generated
+              in the worker.
             </div>
           </div>
         </div>
@@ -432,7 +468,8 @@ export default function App() {
         <div className="topbarLeft">
           <div className="brand">RBR Instant Lite Lab</div>
           <div className="sub">
-            Internal testing page — generate reports and compare quality side by side.
+            Internal testing page — generate reports and compare quality side by
+            side.
           </div>
         </div>
 
@@ -519,7 +556,9 @@ export default function App() {
               </div>
 
               {!history.length ? (
-                <div className="empty">No reports yet. Generate one to start comparing.</div>
+                <div className="empty">
+                  No reports yet. Generate one to start comparing.
+                </div>
               ) : (
                 <div className="tableWrap">
                   <table className="table">
@@ -546,23 +585,36 @@ export default function App() {
                           >
                             <td className="mono">{timeStr}</td>
                             <td>
-                              <div className="titleCell">{h.title || h.topic}</div>
+                              <div className="titleCell">
+                                {h.title || h.topic}
+                              </div>
                               <div className="mutedSmall">{h.topic}</div>
                             </td>
                             <td className="mono">{h.instantId || "-"}</td>
                             <td>
-                              <span className={`badge ${String(h.status || "").toLowerCase()}`}>
+                              <span
+                                className={`badge ${String(
+                                  h.status || ""
+                                ).toLowerCase()}`}
+                              >
                                 {h.status || "-"}
                               </span>
                             </td>
                             <td>
                               <div className="rowActions">
-                                <button className="chip" onClick={() => setLeft(h.id)}>
+                                <button
+                                  className="chip"
+                                  onClick={() => setLeft(h.id)}
+                                >
                                   {isLeft ? "Viewing Left" : "View Left"}
                                 </button>
-                                <button className="chip" onClick={() => setRight(h.id)}>
+                                <button
+                                  className="chip"
+                                  onClick={() => setRight(h.id)}
+                                >
                                   {isRight ? "Viewing Right" : "View Right"}
                                 </button>
+
                                 {h.pdfUrl ? (
                                   <a
                                     className="chipLink"
@@ -575,7 +627,11 @@ export default function App() {
                                 ) : (
                                   <span className="chipDisabled">No link</span>
                                 )}
-                                <button className="chipDanger" onClick={() => removeItem(h.id)}>
+
+                                <button
+                                  className="chipDanger"
+                                  onClick={() => removeItem(h.id)}
+                                >
                                   Remove
                                 </button>
                               </div>
@@ -592,7 +648,9 @@ export default function App() {
             {lastApiResponse ? (
               <div className="card" style={{ marginTop: 12 }}>
                 <div className="cardTitle">API Response (debug)</div>
-                <pre className="debugPre">{JSON.stringify(lastApiResponse, null, 2)}</pre>
+                <pre className="debugPre">
+                  {JSON.stringify(lastApiResponse, null, 2)}
+                </pre>
               </div>
             ) : null}
           </aside>
@@ -614,25 +672,41 @@ export default function App() {
                 <div className="paneMeta">
                   {leftItem ? (
                     <>
-                      <span className="mono">{leftItem.instantId || leftItem.id}</span>
+                      <span className="mono">
+                        {leftItem.instantId || leftItem.id}
+                      </span>
                       <span className="dot">•</span>
-                      <span className="mutedSmall">{leftItem.title || leftItem.topic}</span>
+                      <span className="mutedSmall">
+                        {leftItem.title || leftItem.topic}
+                      </span>
                     </>
                   ) : (
                     <span className="mutedSmall">No selection</span>
                   )}
                 </div>
                 {leftItem?.pdfUrl ? (
-                  <a className="openBtn" href={leftItem.pdfUrl} target="_blank" rel="noreferrer">
+                  <a
+                    className="openBtn"
+                    href={leftItem.pdfUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
                     Open
                   </a>
                 ) : null}
               </div>
 
               {leftItem?.pdfUrl ? (
-                <iframe className="pdfFrame" src={leftItem.pdfUrl} title="Left PDF" />
+                <iframe
+                  key={leftItem.pdfUrl} // forces reload only when URL changes
+                  className="pdfFrame"
+                  src={leftItem.pdfUrl}
+                  title="Left PDF"
+                />
               ) : (
-                <div className="pdfEmpty">Select a report and click “View Left”.</div>
+                <div className="pdfEmpty">
+                  Select a report and click “View Left”.
+                </div>
               )}
             </div>
 
@@ -642,25 +716,41 @@ export default function App() {
                 <div className="paneMeta">
                   {rightItem ? (
                     <>
-                      <span className="mono">{rightItem.instantId || rightItem.id}</span>
+                      <span className="mono">
+                        {rightItem.instantId || rightItem.id}
+                      </span>
                       <span className="dot">•</span>
-                      <span className="mutedSmall">{rightItem.title || rightItem.topic}</span>
+                      <span className="mutedSmall">
+                        {rightItem.title || rightItem.topic}
+                      </span>
                     </>
                   ) : (
                     <span className="mutedSmall">No selection</span>
                   )}
                 </div>
                 {rightItem?.pdfUrl ? (
-                  <a className="openBtn" href={rightItem.pdfUrl} target="_blank" rel="noreferrer">
+                  <a
+                    className="openBtn"
+                    href={rightItem.pdfUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
                     Open
                   </a>
                 ) : null}
               </div>
 
               {rightItem?.pdfUrl ? (
-                <iframe className="pdfFrame" src={rightItem.pdfUrl} title="Right PDF" />
+                <iframe
+                  key={rightItem.pdfUrl}
+                  className="pdfFrame"
+                  src={rightItem.pdfUrl}
+                  title="Right PDF"
+                />
               ) : (
-                <div className="pdfEmpty">Select a report and click “View Right”.</div>
+                <div className="pdfEmpty">
+                  Select a report and click “View Right”.
+                </div>
               )}
             </div>
           </div>
