@@ -38,7 +38,6 @@ body {
   overflow-y: auto;
 }
 
-
 .mono {
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono",
     monospace;
@@ -82,12 +81,22 @@ body {
   gap: 14px;
   padding: 12px 14px 14px;
 }
+
+/* ✅ Full-width mode when inputs hidden */
 .layoutFull {
   grid-template-columns: 1fr;
 }
 
+/* ✅ Stronger selector (matches className="layout layoutFull") */
 .layout.layoutFull {
-  grid-template-columns: 1fr;
+  grid-template-columns: 1fr !important;
+}
+
+/* ✅ Ensure the right column truly spans the full grid */
+.layout.layoutFull .right {
+  grid-column: 1 / -1;
+  width: 100%;
+  max-width: none;
 }
 
 .left {
@@ -101,6 +110,10 @@ body {
   min-height: 0;
   max-height: calc(100vh - 110px); /* tweak if your header height differs */
   overflow-y: auto;
+
+  /* ✅ Grid shrink/expand fix (prevents weird width behavior) */
+  min-width: 0;
+  width: 100%;
 }
 
 .page, .layout, .topbar {
