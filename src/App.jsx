@@ -111,6 +111,7 @@ export default function App() {
       });
 
       const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
       if (!res.ok || !data?.ok) {
         const msg = data?.error || data?.details || "Request failed";
         throw new Error(msg);
