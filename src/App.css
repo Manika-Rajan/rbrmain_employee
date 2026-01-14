@@ -1,317 +1,499 @@
 :root {
-  font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif;
+  --bg0: #070b14;
+  --bg1: #0b1222;
+  --card: rgba(255, 255, 255, 0.06);
+  --card2: rgba(255, 255, 255, 0.09);
+  --border: rgba(255, 255, 255, 0.12);
+  --text: rgba(236, 242, 255, 0.92);
+  --muted: rgba(236, 242, 255, 0.62);
+  --muted2: rgba(236, 242, 255, 0.42);
+  --good: rgba(98, 255, 195, 0.95);
+  --warn: rgba(255, 214, 102, 0.95);
+  --bad: rgba(255, 110, 110, 0.95);
+  --info: rgba(140, 190, 255, 0.95);
+}
+
+* {
+  box-sizing: border-box;
+}
+html,
+body {
+  height: 100%;
+}
+body {
+  margin: 0;
+  color: var(--text);
+  font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica,
+    Arial;
+  background: radial-gradient(1200px 600px at 15% 0%, rgba(120, 180, 255, 0.18), transparent 55%),
+    radial-gradient(900px 520px at 85% 10%, rgba(155, 90, 255, 0.16), transparent 55%),
+    linear-gradient(180deg, var(--bg0), var(--bg1));
+}
+
+.mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono",
+    monospace;
 }
 
 .page {
   min-height: 100vh;
-  background: #0b0f19;
-  color: #e8eefc;
-}
-
-/* ===== Topbar (updated for Hide/Show button) ===== */
-.topbar {
-  padding: 14px 14px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
-  background: rgba(255,255,255,0.02);
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-}
-
-.topbarLeft { min-width: 0; }
-.topbarRight { display: flex; gap: 10px; }
-
-.brand {
-  font-size: 18px;
-  font-weight: 700;
-}
-
-.sub {
-  margin-top: 4px;
-  font-size: 12px;
-  opacity: 0.8;
-}
-
-/* ===== Layout (bigger right-side usage + hide-left mode) ===== */
-.layout {
-  display: grid;
-  grid-template-columns: 460px 1fr;
-  gap: 12px;
-  padding: 10px;              /* less padding = more usable space */
-  height: calc(100vh - 72px); /* main working area height */
-}
-
-.layoutFull {
-  grid-template-columns: 1fr; /* when left is hidden */
-}
-
-.left, .right { min-width: 0; }
-
-.right {
-  min-width: 0;
   display: flex;
   flex-direction: column;
 }
 
-/* ===== Cards / Inputs ===== */
-.card {
-  background: rgba(255,255,255,0.03);
-  border: 1px solid rgba(255,255,255,0.08);
-  border-radius: 14px;
-  padding: 14px;
+.topbar {
+  padding: 18px 18px 12px;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
 }
 
+.brandRow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.brand {
+  font-size: 18px;
+  font-weight: 900;
+  letter-spacing: 0.2px;
+}
+.sub {
+  color: var(--muted);
+  font-size: 12.5px;
+  margin-top: 6px;
+  max-width: 720px;
+}
+
+.layout {
+  flex: 1;
+  display: grid;
+  grid-template-columns: 460px 1fr;
+  gap: 14px;
+  padding: 0 14px 14px;
+}
+.layoutFull {
+  grid-template-columns: 1fr;
+}
+
+.card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: 14px;
+}
+.glass {
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.10), rgba(255, 255, 255, 0.05));
+  backdrop-filter: blur(10px);
+}
+
+.cardTitleRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 10px;
+}
 .cardTitle {
-  font-weight: 700;
-  margin-bottom: 12px;
+  font-weight: 900;
+}
+.titleRow{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:10px;
 }
 
 .label {
   display: block;
   font-size: 12px;
-  opacity: 0.85;
-  margin-bottom: 6px;
+  color: var(--muted);
+  margin: 10px 0 6px;
 }
-
-.input, .textarea {
+.input,
+.textarea {
   width: 100%;
-  box-sizing: border-box;
-  background: rgba(0,0,0,0.25);
-  border: 1px solid rgba(255,255,255,0.12);
-  color: #e8eefc;
-  border-radius: 10px;
-  padding: 10px 10px;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.10);
+  background: rgba(0, 0, 0, 0.25);
+  color: var(--text);
+  padding: 10px 12px;
   outline: none;
 }
+.input:focus,
+.textarea:focus {
+  border-color: rgba(160, 200, 255, 0.35);
+  box-shadow: 0 0 0 3px rgba(120, 180, 255, 0.12);
+}
 
-.textarea {
-  resize: vertical;
+.qGrid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 8px;
 }
 
 .actions {
   display: flex;
   gap: 10px;
+  margin-top: 14px;
+}
+
+.btnPrimary,
+.btnSecondary,
+.btnDanger {
+  border-radius: 12px;
+  padding: 10px 12px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text);
+  font-weight: 800;
+  cursor: pointer;
+}
+.btnPrimary {
+  background: linear-gradient(135deg, rgba(120, 180, 255, 0.35), rgba(155, 90, 255, 0.20));
+  border-color: rgba(120, 180, 255, 0.25);
+}
+.btnDanger {
+  background: rgba(255, 110, 110, 0.16);
+  border-color: rgba(255, 110, 110, 0.25);
+}
+.btnPrimary:disabled,
+.btnSecondary:disabled,
+.btnDanger:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+.btnPrimary:hover:not(:disabled),
+.btnSecondary:hover:not(:disabled),
+.btnDanger:hover:not(:disabled) {
+  transform: translateY(-1px);
+  transition: transform 0.12s ease;
+}
+
+.kv {
   margin-top: 12px;
+  border-top: 1px dashed rgba(255, 255, 255, 0.12);
+  padding-top: 12px;
 }
-
-.btn {
-  background: #2d6cff;
-  border: none;
-  color: white;
-  padding: 10px 12px;
-  border-radius: 10px;
-  cursor: pointer;
-  font-weight: 600;
+.kvRow {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 8px;
 }
-
-.btn:disabled { opacity: 0.6; cursor: not-allowed; }
-
-.btnSecondary {
-  background: rgba(255,255,255,0.08);
-  border: 1px solid rgba(255,255,255,0.12);
-  color: #e8eefc;
-  padding: 10px 12px;
-  border-radius: 10px;
-  cursor: pointer;
-}
-
-.apiLine {
-  margin-top: 10px;
+.kvKey {
+  color: var(--muted);
   font-size: 12px;
-  opacity: 0.9;
-  word-break: break-all;
 }
-
-.apiLabel { opacity: 0.7; }
-.apiValue { opacity: 0.95; }
+.kvVal {
+  color: rgba(236, 242, 255, 0.85);
+  font-size: 12px;
+  max-width: 300px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 
 .errorBox {
-  margin-top: 10px;
-  padding: 10px;
-  border-radius: 10px;
-  background: rgba(255, 80, 80, 0.12);
-  border: 1px solid rgba(255, 80, 80, 0.25);
-  color: #ffb3b3;
-  font-size: 12px;
+  margin-top: 12px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 110, 110, 0.28);
+  background: rgba(255, 110, 110, 0.12);
+  color: rgba(255, 210, 210, 0.95);
+  font-size: 13px;
 }
-
-/* ===== History table ===== */
-.empty {
+.warnSmall {
+  margin-top: 6px;
   font-size: 12px;
-  opacity: 0.8;
-  padding: 10px 0;
+  color: rgba(255, 214, 102, 0.92);
 }
 
 .tableWrap {
   overflow: auto;
-  max-height: 42vh;
   border-radius: 12px;
-  border: 1px solid rgba(255,255,255,0.08);
 }
-
 .table {
   width: 100%;
   border-collapse: collapse;
-  font-size: 12px;
-  background: rgba(0,0,0,0.18);
+  font-size: 13px;
 }
-
-.table th, .table td {
+.table th {
   text-align: left;
-  padding: 10px;
-  border-bottom: 1px solid rgba(255,255,255,0.08);
+  color: rgba(236, 242, 255, 0.78);
+  font-size: 12px;
+  padding: 10px 10px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.10);
+}
+.table td {
+  padding: 10px 10px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
   vertical-align: top;
 }
-
-.table th {
-  position: sticky;
-  top: 0;
-  background: rgba(12, 16, 30, 0.95);
-  z-index: 1;
-}
-
 .rowSelected {
-  background: rgba(45, 108, 255, 0.12);
+  background: rgba(120, 180, 255, 0.08);
 }
-
 .titleCell {
-  font-weight: 700;
-}
-
-.mutedSmall {
-  font-size: 11px;
-  opacity: 0.7;
-  margin-top: 3px;
-}
-
-.mono {
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
-  font-size: 11px;
+  font-weight: 900;
 }
 
 .rowActions {
   display: flex;
-  flex-wrap: wrap;
   gap: 8px;
+  flex-wrap: wrap;
 }
 
-.chip, .chipDanger, .chipLink {
+.chip,
+.chipLink,
+.chipDisabled,
+.chipDanger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 7px 10px;
   border-radius: 999px;
-  padding: 6px 10px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: rgba(255, 255, 255, 0.08);
+  color: rgba(236, 242, 255, 0.88);
   font-size: 12px;
-  cursor: pointer;
-  border: 1px solid rgba(255,255,255,0.12);
-  background: rgba(255,255,255,0.06);
-  color: #e8eefc;
+  font-weight: 800;
   text-decoration: none;
 }
-
+.chipLink {
+  background: rgba(98, 255, 195, 0.12);
+  border-color: rgba(98, 255, 195, 0.22);
+}
 .chipDanger {
-  background: rgba(255, 80, 80, 0.12);
-  border: 1px solid rgba(255, 80, 80, 0.25);
-  color: #ffb3b3;
+  background: rgba(255, 110, 110, 0.14);
+  border-color: rgba(255, 110, 110, 0.22);
+}
+.chipDisabled {
+  opacity: 0.45;
+  cursor: not-allowed;
 }
 
-/* ===== Compare header (less padding = more PDF space) ===== */
+.pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.10);
+  color: rgba(236, 242, 255, 0.86);
+  font-size: 12px;
+  white-space: nowrap;
+}
+.pillSoft {
+  background: rgba(255, 255, 255, 0.06);
+}
+.pillGood {
+  background: rgba(98, 255, 195, 0.14);
+  border-color: rgba(98, 255, 195, 0.24);
+}
+.pillBad {
+  background: rgba(255, 110, 110, 0.14);
+  border-color: rgba(255, 110, 110, 0.24);
+}
+.pillInfo {
+  background: rgba(140, 190, 255, 0.14);
+  border-color: rgba(140, 190, 255, 0.24);
+}
+
 .compareHeader {
   display: flex;
-  align-items: baseline;
+  align-items: flex-start;
   justify-content: space-between;
-  padding: 6px 2px 8px 2px;
+  gap: 12px;
+  padding: 8px 8px 10px;
 }
-
 .compareTitle {
   font-size: 16px;
-  font-weight: 700;
+  font-weight: 900;
 }
-
 .compareHint {
-  font-size: 12px;
-  opacity: 0.75;
-  margin-left: 10px;
+  color: var(--muted);
+  font-size: 12.5px;
+  margin-top: 6px;
+}
+.compareBadges {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
 }
 
-/* ===== Bigger PDF viewers ===== */
 .pdfGrid {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 12px;
-  height: calc(100vh - 130px); /* bigger than before */
+  padding: 0 8px 8px;
 }
-
 .pdfPane {
-  background: rgba(255,255,255,0.03);
-  border: 1px solid rgba(255,255,255,0.08);
-  border-radius: 14px;
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.10);
   overflow: hidden;
+  min-height: 65vh;
   display: flex;
   flex-direction: column;
-  min-width: 0;
 }
-
 .pdfPaneHeader {
+  padding: 10px 12px;
   display: flex;
   align-items: center;
+  justify-content: space-between;
   gap: 10px;
-  padding: 10px 12px;
-  border-bottom: 1px solid rgba(255,255,255,0.08);
-  background: rgba(255,255,255,0.02);
+  background: rgba(0, 0, 0, 0.18);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
 }
-
 .paneTitle {
-  font-weight: 800;
-  width: 42px;
+  font-weight: 900;
 }
-
 .paneMeta {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-}
-
-.dot { margin: 0 8px; opacity: 0.6; }
-
-.openBtn {
-  background: rgba(255,255,255,0.08);
-  border: 1px solid rgba(255,255,255,0.12);
-  color: #e8eefc;
-  padding: 6px 10px;
-  border-radius: 10px;
-  text-decoration: none;
+  color: var(--muted);
   font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.openBtn {
+  padding: 7px 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: rgba(255, 255, 255, 0.08);
+  color: rgba(236, 242, 255, 0.90);
+  font-size: 12px;
+  font-weight: 900;
+  text-decoration: none;
 }
 
 .pdfFrame {
   width: 100%;
   height: 100%;
   border: 0;
-  background: #111;
+  flex: 1;
+  background: rgba(0, 0, 0, 0.25);
 }
 
 .pdfEmpty {
-  padding: 14px;
-  font-size: 12px;
-  opacity: 0.75;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 18px;
+  text-align: center;
 }
 
-/* Footer can stay, but this layout is already using most space */
+.emptyFancy {
+  padding: 18px;
+  text-align: center;
+}
+.emptyTitle {
+  font-weight: 900;
+  font-size: 14px;
+}
+.emptySub {
+  color: var(--muted);
+  font-size: 12.5px;
+  margin-top: 6px;
+}
+
+.debugPre {
+  margin: 10px 0 0;
+  padding: 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.10);
+  background: rgba(0, 0, 0, 0.25);
+  color: rgba(236, 242, 255, 0.82);
+  font-size: 12px;
+  overflow: auto;
+}
+
 .footer {
-  padding: 10px 14px 14px;
+  padding: 10px 16px 16px;
+  color: var(--muted2);
   font-size: 12px;
-  opacity: 0.7;
+  text-align: center;
 }
 
-/* ===== Responsive ===== */
-@media (max-width: 1150px) {
+/* ===== Modal ===== */
+.modalOverlay {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  background: rgba(0, 0, 0, 0.62);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+}
+.modalCard {
+  width: min(640px, 96vw);
+  border-radius: 18px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.10), rgba(255, 255, 255, 0.06));
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  box-shadow: 0 18px 60px rgba(0, 0, 0, 0.45);
+  padding: 16px;
+}
+.modalHeader {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+.modalTitle {
+  font-size: 16px;
+  font-weight: 900;
+}
+.modalHint {
+  margin-top: 6px;
+  font-size: 12.5px;
+  color: var(--muted);
+}
+.modalMeta {
+  margin-top: 10px;
+  font-size: 12px;
+  color: rgba(236, 242, 255, 0.72);
+}
+.modalFoot {
+  margin-top: 12px;
+  display: flex;
+  justify-content: flex-end;
+}
+
+.barWrap {
+  margin-top: 14px;
+}
+.barBg {
+  height: 10px;
+  width: 100%;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.10);
+  overflow: hidden;
+}
+.barFg {
+  height: 100%;
+  background: rgba(236, 242, 255, 0.86);
+  transition: width 350ms ease;
+}
+.barText {
+  margin-top: 8px;
+  font-size: 12px;
+  color: rgba(236, 242, 255, 0.75);
+}
+
+/* Responsive */
+@media (max-width: 1100px) {
   .layout {
     grid-template-columns: 1fr;
-    height: auto;
   }
   .pdfGrid {
     grid-template-columns: 1fr;
-    height: auto;
+  }
+  .pdfPane {
+    min-height: 55vh;
   }
 }
