@@ -13,8 +13,7 @@ const DEFAULT_QUESTIONS = [
   "What is the 3–5 year outlook with opportunities and recommendations?",
 ];
 
-const STORAGE_KEY = "rbr_instant_lab_history_v1";
-const CLIENT_TIMEOUT_MS = 25000;
+const STORAGE_KEY = "rbr_instant_lab_history_v2";
 
 function loadHistory() {
   try {
@@ -30,34 +29,25 @@ function loadHistory() {
 function saveHistory(items) {
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(items));
-  } catch {}
+  } catch {
+    // ignore
+  }
 }
 
 function nowIso() {
   return new Date().toISOString();
 }
 
-function clamp(n, a, b) {
-  return Math.max(a, Math.min(b, n));
-}
-
-async function fetchJsonWithTimeout(url, options, timeoutMs) {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
-
+async function fetchJson(url, options) {
+  const res = await fetch(url, options);
+  const text = await res.text();
+  let data = {};
   try {
-    const res = await fetch(url, { ...options, signal: controller.signal });
-    const text = await res.text();
-    let data = {};
-    try {
-      data = text ? JSON.parse(text) : {};
-    } catch {
-      data = { raw: text };
-    }
-    return { res, data };
-  } finally {
-    clearTimeout(timer);
+    data = text ? JSON.parse(text) : {};
+  } catch {
+    data = { raw: text };
   }
+  return { res, data };
 }
 
 function buildErrorMessage(res, data, fallback) {
@@ -68,74 +58,50 @@ function buildErrorMessage(res, data, fallback) {
     (typeof data?.raw === "string" && data.raw.slice(0, 200)) ||
     fallback;
 
-  if (res?.status === 504) {
-    return `Upstream timeout (OpenAI). Try again. Details: ${base}`;
-  }
   return base || fallback || `HTTP ${res?.status || "error"}`;
 }
 
-function deriveStatusUrl(confirmUrl, explicitStatusUrl) {
-  if (explicitStatusUrl) return explicitStatusUrl;
-  try {
-    const u = new URL(confirmUrl);
-    u.pathname = u.pathname.replace(/\/confirm\/?$/, "/status");
-    return u.toString();
-  } catch {
-    return "";
-  }
-}
-
-function fmtTime(iso) {
-  try {
-    return new Date(iso).toLocaleString();
-  } catch {
-    return "-";
-  }
-}
-
-function statusTone(s) {
-  const st = (s || "").toLowerCase();
-  if (st === "done") return "pillGood";
-  if (st === "failed") return "pillBad";
-  if (st === "running") return "pillInfo";
-  if (st === "queued") return "pillSoft";
-  return "pillSoft";
+// Helper: add cache-buster to iframe src
+function withBuster(url) {
+  if (!url) return url;
+  const u = new URL(url, window.location.origin);
+  u.searchParams.set("_ts", String(Date.now()));
+  return u.toString();
 }
 
 export default function App() {
-  const API_URL = import.meta.env.VITE_API_URL; // POST /instant-report/confirm
-  const STATUS_URL = deriveStatusUrl(API_URL, import.meta.env.VITE_STATUS_URL);
+  // ENV (set these in Amplify env vars)
+  const CONFIRM_API = import.meta.env.VITE_CONFIRM_API;
+  const STATUS_API = import.meta.env.VITE_STATUS_API;
+  const PRESIGN_API = import.meta.env.VITE_PRESIGN_API;
 
   const [topic, setTopic] = useState("FMCG market report India");
   const [questions, setQuestions] = useState(DEFAULT_QUESTIONS);
 
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
-
   const [lastApiResponse, setLastApiResponse] = useState(null);
-  const [history, setHistory] = useState(() => loadHistory());
 
+  const [history, setHistory] = useState(() => loadHistory());
   const [leftId, setLeftId] = useState(null);
   const [rightId, setRightId] = useState(null);
   const [leftHidden, setLeftHidden] = useState(false);
 
-  // Fancy modal
+  // Fancy modal state
   const [modalOpen, setModalOpen] = useState(false);
-  const [modalTitle, setModalTitle] = useState("Generating your report…");
-  const [modalHint, setModalHint] = useState("This can take up to 2 minutes.");
-  const [progressPct, setProgressPct] = useState(0);
-  const [jobInfo, setJobInfo] = useState(null);
+  const [modalTitle, setModalTitle] = useState("Generating report…");
+  const [modalSub, setModalSub] = useState("Initializing…");
+  const [progressPct, setProgressPct] = useState(5);
 
-  const pollTimerRef = useRef(null);
-  const progressTimerRef = useRef(null);
-  const pollAbortRef = useRef(null);
-
-  useEffect(() => saveHistory(history), [history]);
+  // current job ref (avoid stale closures)
+  const jobRef = useRef(null);
+  const pollAbortRef = useRef({ aborted: false });
 
   useEffect(() => {
-    // ✅ On refresh, ensure page starts at the top of LEFT panel
-    const left = document.querySelector(".left");
-    if (left) left.scrollTop = 0;
+    saveHistory(history);
+  }, [history]);
+
+  useEffect(() => {
     if (!history.length) return;
     const sorted = [...history].sort(
       (a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0)
@@ -160,124 +126,136 @@ export default function App() {
     setQuestions((prev) => prev.map((q, idx) => (idx === i ? val : q)));
   }
 
-  function stopPolling() {
-    if (pollTimerRef.current) clearInterval(pollTimerRef.current);
-    pollTimerRef.current = null;
-
-    if (progressTimerRef.current) clearInterval(progressTimerRef.current);
-    progressTimerRef.current = null;
-
-    if (pollAbortRef.current) pollAbortRef.current.abort();
-    pollAbortRef.current = null;
-  }
-
-  function closeModal() {
-    setModalOpen(false);
-    setModalTitle("Generating your report…");
-    setModalHint("This can take up to 2 minutes.");
-    setProgressPct(0);
-    setJobInfo(null);
-    stopPolling();
-  }
-
-  async function pollStatusUntilDone({ userPhone, instantId }) {
-    if (!STATUS_URL) {
-      throw new Error(
-        "Status API URL missing. Set VITE_STATUS_URL in Amplify env vars."
+  function ensureEnv() {
+    const missing = [];
+    if (!CONFIRM_API) missing.push("VITE_CONFIRM_API");
+    if (!STATUS_API) missing.push("VITE_STATUS_API");
+    if (!PRESIGN_API) missing.push("VITE_PRESIGN_API");
+    if (missing.length) {
+      setError(
+        `Missing env var(s): ${missing.join(
+          ", "
+        )}. Add them in Amplify env vars and redeploy.`
       );
+      return false;
     }
+    return true;
+  }
 
+  function upsertHistoryItem(id, patch) {
+    setHistory((prev) =>
+      prev.map((x) => (x.id === id ? { ...x, ...patch } : x))
+    );
+  }
+
+  async function pollStatusUntilDone({ userPhone, instantId, historyId }) {
     const startedAt = Date.now();
+    pollAbortRef.current.aborted = false;
 
-    // Smooth progress to 90%
+    setModalOpen(true);
+    setModalTitle("Generating report…");
+    setModalSub("Queued. Starting worker…");
     setProgressPct(8);
-    progressTimerRef.current = setInterval(() => {
-      setProgressPct((p) => clamp(p + (p < 60 ? 3 : p < 85 ? 2 : 1), 0, 90));
-    }, 1600);
 
-    pollAbortRef.current = new AbortController();
-
-    async function checkOnce() {
-      const qs = new URLSearchParams({ userPhone, instantId });
-      const url = `${STATUS_URL}?${qs.toString()}`;
-
-      const res = await fetch(url, {
-        method: "GET",
-        signal: pollAbortRef.current.signal,
+    // smooth-ish progress animation up to 92%
+    const timer = setInterval(() => {
+      setProgressPct((p) => {
+        if (p >= 92) return p;
+        return Math.min(92, p + 1);
       });
-      const text = await res.text();
-      let data = {};
-      try {
-        data = text ? JSON.parse(text) : {};
-      } catch {
-        data = { raw: text };
-      }
-      setLastApiResponse(data);
+    }, 900);
 
-      if (!res.ok || !data?.ok) {
-        throw new Error(buildErrorMessage(res, data, "Status check failed"));
-      }
+    try {
+      while (Date.now() - startedAt < MAX_WAIT_MS) {
+        if (pollAbortRef.current.aborted) {
+          throw new Error("Polling aborted");
+        }
 
-      const status = (data?.status || "").toLowerCase();
+        // GET /status?userPhone=...&instantId=...
+        const url = new URL(STATUS_API);
+        url.searchParams.set("userPhone", userPhone);
+        url.searchParams.set("instantId", instantId);
 
-      if (status === "failed") {
-        throw new Error(data?.error || "Worker failed.");
-      }
+        const { res, data } = await fetchJson(url.toString(), {
+          method: "GET",
+          headers: { "Content-Type": "application/json" },
+        });
 
-      if (status === "done") {
-        setProgressPct(100);
-        setModalTitle("Report ready ✅");
-        setModalHint("Saving to your lab history…");
-        return data;
-      }
+        setLastApiResponse(data);
 
-      const elapsed = Date.now() - startedAt;
-      const secs = Math.floor(elapsed / 1000);
+        if (!res.ok || !data?.ok) {
+          throw new Error(buildErrorMessage(res, data, "Status check failed"));
+        }
 
-      setModalTitle(status === "running" ? "Generating…" : "Queued…");
-      setModalHint(`Status: ${status || "unknown"} • ${secs}s elapsed`);
+        const status = (data.status || "").toLowerCase();
+        const errMsg = data.error || data.details || "";
 
-      if (elapsed > MAX_WAIT_MS) {
-        throw new Error(
-          "Still not done after 2 minutes. Please try again or check worker logs."
+        // reflect status in UI/history
+        upsertHistoryItem(historyId, {
+          status: data.status || "unknown",
+          statusResponse: data,
+        });
+
+        if (status === "done") {
+          setModalSub("Finalizing… preparing download link");
+          setProgressPct(95);
+          return data; // contains s3Key sometimes, depending on your status lambda
+        }
+
+        if (status === "failed") {
+          throw new Error(errMsg || "Report generation failed");
+        }
+
+        // still queued/running
+        setModalSub(
+          status === "running"
+            ? "Generating content and charts…"
+            : "Queued… waiting for worker"
         );
+
+        await new Promise((r) => setTimeout(r, POLL_EVERY_MS));
       }
 
-      return null;
+      throw new Error(
+        `Still running after ${Math.round(MAX_WAIT_MS / 1000)}s. Please wait and try again.`
+      );
+    } finally {
+      clearInterval(timer);
+    }
+  }
+
+  async function getPresignedUrl({ userPhone, instantId, s3Key }) {
+    // Use GET /presign?s3Key=... (preferred) else userPhone+instantId
+    const url = new URL(PRESIGN_API);
+
+    if (s3Key) {
+      url.searchParams.set("s3Key", s3Key);
+    } else {
+      url.searchParams.set("userPhone", userPhone);
+      url.searchParams.set("instantId", instantId);
     }
 
-    let out = await checkOnce();
-    if (out) return out;
-
-    return new Promise((resolve, reject) => {
-      pollTimerRef.current = setInterval(async () => {
-        try {
-          const r = await checkOnce();
-          if (r) {
-            stopPolling();
-            resolve(r);
-          }
-        } catch (e) {
-          stopPolling();
-          reject(e);
-        }
-      }, POLL_EVERY_MS);
+    const { res, data } = await fetchJson(url.toString(), {
+      method: "GET",
+      headers: { "Content-Type": "application/json" },
     });
+
+    if (!res.ok || !data?.ok) {
+      throw new Error(buildErrorMessage(res, data, "Presign failed"));
+    }
+
+    return data.presignedUrl || data.presigned_url || "";
   }
 
   async function generate() {
     setError("");
     setLastApiResponse(null);
 
+    if (!ensureEnv()) return;
+
     const t = topic.trim();
     const qs = questions.map((q) => (q || "").trim());
 
-    if (!API_URL) {
-      setError(
-        "VITE_API_URL is not set. Add it in Amplify env vars and redeploy."
-      );
-      return;
-    }
     if (!t) {
       setError("Please enter a topic.");
       return;
@@ -288,14 +266,11 @@ export default function App() {
     }
 
     setLoading(true);
-
-    // Open fancy modal
-    setModalOpen(true);
-    setModalTitle("Starting…");
-    setModalHint("Submitting request to server…");
-    setProgressPct(3);
+    setModalOpen(false);
+    setProgressPct(5);
 
     try {
+      // 1) Confirm (queue the job)
       const payload = {
         bypass: true,
         employeeId: "10000001",
@@ -303,16 +278,16 @@ export default function App() {
         questions: qs,
       };
 
-      // 1) Confirm -> queued
-      const { res, data } = await fetchJsonWithTimeout(
-        API_URL,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(payload),
-        },
-        CLIENT_TIMEOUT_MS
-      );
+      setModalOpen(true);
+      setModalTitle("Generating report…");
+      setModalSub("Submitting request…");
+      setProgressPct(10);
+
+      const { res, data } = await fetchJson(CONFIRM_API, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
 
       setLastApiResponse(data);
 
@@ -320,52 +295,70 @@ export default function App() {
         throw new Error(buildErrorMessage(res, data, "Request failed"));
       }
 
-      if (!data?.userPhone || !data?.instantId) {
-        throw new Error("Confirm API did not return userPhone/instantId.");
+      const userPhone = data.userPhone || data.user_phone || "";
+      const instantId = data.instantId || data.instant_id || "";
+      if (!userPhone || !instantId) {
+        throw new Error("Confirm API did not return userPhone + instantId");
       }
 
-      const job = {
-        userPhone: data.userPhone,
-        instantId: data.instantId,
-        query: t,
-        createdAt: data.createdAt || nowIso(),
-      };
-      setJobInfo(job);
-
-      setModalTitle("Queued…");
-      setModalHint("Worker started. Generating PDF…");
-      setProgressPct(12);
-
-      // 2) Poll status endpoint
-      const statusData = await pollStatusUntilDone(job);
+      const historyId = `${instantId}-${Date.now()}`;
 
       const newItem = {
-        id: `${job.instantId || (crypto.randomUUID?.() ?? Date.now())}`,
-        createdAt: statusData?.createdAt || job.createdAt,
+        id: historyId,
+        createdAt: data.createdAt || nowIso(),
         topic: t,
-        title: statusData?.title || t,
-        instantId: job.instantId,
-
-        // NOTE: pdfUrl can be calmly empty for now (you will plug presign API later)
-        pdfUrl: statusData?.pdfUrl || "",
-
-        status: statusData?.status || "done",
-        s3Bucket: statusData?.s3Bucket || "",
-        s3Key: statusData?.s3Key || "",
-        apiResponse: { confirm: data, status: statusData },
+        title: data.title || t,
+        userPhone,
+        instantId,
+        status: data.status || "queued",
+        s3Key: data.s3Key || "",
+        pdfUrl: "",
+        apiResponse: data,
       };
 
       setHistory((prev) => [newItem, ...prev].slice(0, 200));
       setRightId((prevRight) => leftId || prevRight);
-      setLeftId(newItem.id);
+      setLeftId(historyId);
 
-      setTimeout(() => closeModal(), 700);
+      jobRef.current = { userPhone, instantId, historyId };
+
+      // 2) Poll status until done
+      const statusData = await pollStatusUntilDone({
+        userPhone,
+        instantId,
+        historyId,
+      });
+
+      const finalS3Key =
+        statusData?.s3Key ||
+        statusData?.s3_key ||
+        `instant/${userPhone}/${instantId}.pdf`;
+
+      // 3) Get presigned URL
+      const presignedUrl = await getPresignedUrl({
+        userPhone,
+        instantId,
+        s3Key: finalS3Key,
+      });
+
+      const finalUrl = withBuster(presignedUrl);
+
+      upsertHistoryItem(historyId, {
+        status: "done",
+        s3Key: finalS3Key,
+        pdfUrl: finalUrl,
+      });
+
+      setModalSub("Ready!");
+      setProgressPct(100);
+
+      // close modal after a short moment
+      setTimeout(() => {
+        setModalOpen(false);
+      }, 600);
     } catch (e) {
-      setModalTitle("Failed ❌");
-      setModalHint(e?.message || "Something went wrong.");
-      setProgressPct(0);
+      setModalOpen(false);
       setError(e?.message || "Server error");
-      setTimeout(() => closeModal(), 1400);
     } finally {
       setLoading(false);
     }
@@ -399,65 +392,48 @@ export default function App() {
   }
 
   function clearHistory() {
-    if (!confirm("Clear all generated PDFs from this page history?")) return;
+    if (!confirm("Clear all generated reports from this page history?")) return;
     setHistory([]);
     setLeftId(null);
     setRightId(null);
     try {
       localStorage.removeItem(STORAGE_KEY);
-    } catch {}
+    } catch {
+      // ignore
+    }
   }
 
   return (
     <div className="page">
-      {/* Fancy modal */}
-      {modalOpen && (
+      {/* Loading Modal */}
+      {modalOpen ? (
         <div className="modalOverlay">
           <div className="modalCard">
-            <div className="modalHeader">
-              <div>
-                <div className="modalTitle">{modalTitle}</div>
-                <div className="modalHint">{modalHint}</div>
-                {jobInfo?.instantId ? (
-                  <div className="modalMeta mono">
-                    {jobInfo.instantId} • {jobInfo.userPhone}
-                  </div>
-                ) : null}
+            <div className="modalTitle">{modalTitle}</div>
+            <div className="modalSub">{modalSub}</div>
+
+            <div className="progressWrap">
+              <div className="progressBar">
+                <div
+                  className="progressFill"
+                  style={{ width: `${Math.max(0, Math.min(100, progressPct))}%` }}
+                />
               </div>
-              <button className="btnSecondary" onClick={closeModal}>
-                Close
-              </button>
+              <div className="progressPct">{progressPct}%</div>
             </div>
 
-            <div className="barWrap">
-              <div className="barBg">
-                <div className="barFg" style={{ width: `${progressPct}%` }} />
-              </div>
-              <div className="barText">
-                {progressPct}% • Please keep this tab open
-              </div>
-            </div>
-
-            <div className="modalFoot">
-              <div className="mutedSmall">
-                Polling every {POLL_EVERY_MS / 1000}s • Max wait{" "}
-                {MAX_WAIT_MS / 1000}s
-              </div>
+            <div className="modalHint">
+              This can take up to ~2 minutes because charts + PDF are generated in the worker.
             </div>
           </div>
         </div>
-      )}
+      ) : null}
 
       <header className="topbar">
         <div className="topbarLeft">
-          <div className="brandRow">
-            <div className="brand">RBR Instant Lite Lab</div>
-            <span className="pill">Employee</span>
-            <span className="pill pillSoft">Async worker</span>
-          </div>
+          <div className="brand">RBR Instant Lite Lab</div>
           <div className="sub">
-            Internal testing page — generate reports and compare quality side by
-            side.
+            Internal testing page — generate reports and compare quality side by side.
           </div>
         </div>
 
@@ -475,13 +451,8 @@ export default function App() {
         {/* LEFT PANEL */}
         {!leftHidden && (
           <aside className="left">
-            <div className="card glass">
-              <div className="cardTitleRow">
-                <div className="cardTitle">Generate</div>
-                <div className="mutedSmall">
-                  Max wait: {MAX_WAIT_MS / 1000}s
-                </div>
-              </div>
+            <div className="card">
+              <div className="cardTitle">Generate</div>
 
               <label className="label">Topic</label>
               <input
@@ -491,59 +462,52 @@ export default function App() {
                 placeholder="e.g., FMCG market report India"
               />
 
-              <div className="qGrid">
-                {questions.map((q, i) => (
-                  <div key={i}>
-                    <label className="label">Question {i + 1}</label>
-                    <textarea
-                      className="textarea"
-                      value={q}
-                      onChange={(e) => updateQuestion(i, e.target.value)}
-                      rows={2}
-                    />
-                  </div>
-                ))}
-              </div>
+              {questions.map((q, i) => (
+                <div key={i} style={{ marginTop: 10 }}>
+                  <label className="label">Question {i + 1}</label>
+                  <textarea
+                    className="textarea"
+                    value={q}
+                    onChange={(e) => updateQuestion(i, e.target.value)}
+                    rows={2}
+                  />
+                </div>
+              ))}
 
               <div className="actions">
-                <button
-                  className="btnPrimary"
-                  onClick={generate}
-                  disabled={loading}
-                >
-                  {loading ? "Generating…" : "Generate PDF"}
+                <button className="btn" onClick={generate} disabled={loading}>
+                  {loading ? "Generating..." : "Generate PDF"}
                 </button>
 
                 <button
                   className="btnSecondary"
                   onClick={retry}
                   disabled={loading}
+                  title="Retry the same request"
                 >
                   Retry
                 </button>
 
                 <button
-                  className="btnDanger"
+                  className="btnSecondary"
                   onClick={clearHistory}
                   disabled={!history.length || loading}
                 >
-                  Clear
+                  Clear history
                 </button>
               </div>
 
-              <div className="kv">
-                <div className="kvRow">
-                  <span className="kvKey">Confirm API</span>
-                  <span className="kvVal mono">
-                    {API_URL || "(missing VITE_API_URL)"}
-                  </span>
-                </div>
-                <div className="kvRow">
-                  <span className="kvKey">Status API</span>
-                  <span className="kvVal mono">
-                    {STATUS_URL || "(missing VITE_STATUS_URL)"}
-                  </span>
-                </div>
+              <div className="apiLine">
+                <span className="apiLabel">Confirm API</span>{" "}
+                <span className="apiValue">{CONFIRM_API || "(missing)"}</span>
+              </div>
+              <div className="apiLine">
+                <span className="apiLabel">Status API</span>{" "}
+                <span className="apiValue">{STATUS_API || "(missing)"}</span>
+              </div>
+              <div className="apiLine">
+                <span className="apiLabel">Presign API</span>{" "}
+                <span className="apiValue">{PRESIGN_API || "(missing)"}</span>
               </div>
 
               {error ? <div className="errorBox">Error: {error}</div> : null}
@@ -556,25 +520,23 @@ export default function App() {
               </div>
 
               {!history.length ? (
-                <div className="emptyFancy">
-                  <div className="emptyTitle">No reports yet</div>
-                  <div className="emptySub">
-                    Generate your first instant report to start comparing.
-                  </div>
-                </div>
+                <div className="empty">No reports yet. Generate one to start comparing.</div>
               ) : (
                 <div className="tableWrap">
                   <table className="table">
                     <thead>
                       <tr>
-                        <th style={{ width: 150 }}>Time</th>
+                        <th style={{ width: 140 }}>Time</th>
                         <th>Title / Topic</th>
-                        <th style={{ width: 130 }}>Instant ID</th>
-                        <th style={{ width: 320 }}>Actions</th>
+                        <th style={{ width: 120 }}>Instant ID</th>
+                        <th style={{ width: 100 }}>Status</th>
+                        <th style={{ width: 280 }}>Actions</th>
                       </tr>
                     </thead>
                     <tbody>
                       {history.map((h) => {
+                        const dt = h.createdAt ? new Date(h.createdAt) : null;
+                        const timeStr = dt ? dt.toLocaleString() : "-";
                         const isLeft = h.id === leftId;
                         const isRight = h.id === rightId;
 
@@ -583,41 +545,25 @@ export default function App() {
                             key={h.id}
                             className={isLeft || isRight ? "rowSelected" : ""}
                           >
-                            <td className="mono">{fmtTime(h.createdAt)}</td>
+                            <td className="mono">{timeStr}</td>
                             <td>
-                              <div className="titleRow">
-                                <div className="titleCell">
-                                  {h.title || h.topic}
-                                </div>
-                                <span className={`pill ${statusTone(h.status)}`}>
-                                  {h.status || "done"}
-                                </span>
-                              </div>
+                              <div className="titleCell">{h.title || h.topic}</div>
                               <div className="mutedSmall">{h.topic}</div>
-
-                              {h.status === "done" && !h.pdfUrl ? (
-                                <div className="warnSmall">
-                                  Report ready. PDF link will appear after we
-                                  plug the presign endpoint.
-                                </div>
-                              ) : null}
                             </td>
                             <td className="mono">{h.instantId || "-"}</td>
                             <td>
+                              <span className={`badge ${String(h.status || "").toLowerCase()}`}>
+                                {h.status || "-"}
+                              </span>
+                            </td>
+                            <td>
                               <div className="rowActions">
-                                <button
-                                  className="chip"
-                                  onClick={() => setLeft(h.id)}
-                                >
+                                <button className="chip" onClick={() => setLeft(h.id)}>
                                   {isLeft ? "Viewing Left" : "View Left"}
                                 </button>
-                                <button
-                                  className="chip"
-                                  onClick={() => setRight(h.id)}
-                                >
+                                <button className="chip" onClick={() => setRight(h.id)}>
                                   {isRight ? "Viewing Right" : "View Right"}
                                 </button>
-
                                 {h.pdfUrl ? (
                                   <a
                                     className="chipLink"
@@ -628,24 +574,12 @@ export default function App() {
                                     Open
                                   </a>
                                 ) : (
-                                  <span className="chipDisabled" title="No PDF link yet">
-                                    Open
-                                  </span>
+                                  <span className="chipDisabled">No link</span>
                                 )}
-
-                                <button
-                                  className="chipDanger"
-                                  onClick={() => removeItem(h.id)}
-                                >
+                                <button className="chipDanger" onClick={() => removeItem(h.id)}>
                                   Remove
                                 </button>
                               </div>
-
-                              {h.s3Bucket && h.s3Key ? (
-                                <div className="mutedTiny mono">
-                                  {h.s3Bucket}/{h.s3Key}
-                                </div>
-                              ) : null}
                             </td>
                           </tr>
                         );
@@ -656,16 +590,10 @@ export default function App() {
               )}
             </div>
 
-            {/* Debug (optional) */}
             {lastApiResponse ? (
               <div className="card" style={{ marginTop: 12 }}>
-                <div className="cardTitleRow">
-                  <div className="cardTitle">API Response (debug)</div>
-                  <div className="mutedSmall">latest</div>
-                </div>
-                <pre className="debugPre">
-                  {JSON.stringify(lastApiResponse, null, 2)}
-                </pre>
+                <div className="cardTitle">API Response (debug)</div>
+                <pre className="debugPre">{JSON.stringify(lastApiResponse, null, 2)}</pre>
               </div>
             ) : null}
           </aside>
@@ -674,18 +602,9 @@ export default function App() {
         {/* RIGHT PANEL */}
         <main className="right">
           <div className="compareHeader">
-            <div>
-              <div className="compareTitle">Compare Reports</div>
-              <div className="compareHint">
-                Pick any two reports from the table (View Left / View Right).
-                Hide inputs for maximum space.
-              </div>
-            </div>
-            <div className="compareBadges">
-              <span className="pill pillSoft">
-                Poll: {POLL_EVERY_MS / 1000}s
-              </span>
-              <span className="pill">Max: {MAX_WAIT_MS / 1000}s</span>
+            <div className="compareTitle">Compare PDFs</div>
+            <div className="compareHint">
+              Pick any two reports from the table (View Left / View Right).
             </div>
           </div>
 
@@ -696,43 +615,25 @@ export default function App() {
                 <div className="paneMeta">
                   {leftItem ? (
                     <>
-                      <span className="mono">
-                        {leftItem.instantId || leftItem.id}
-                      </span>
+                      <span className="mono">{leftItem.instantId || leftItem.id}</span>
                       <span className="dot">•</span>
-                      <span className="mutedSmall">
-                        {leftItem.title || leftItem.topic}
-                      </span>
+                      <span className="mutedSmall">{leftItem.title || leftItem.topic}</span>
                     </>
                   ) : (
                     <span className="mutedSmall">No selection</span>
                   )}
                 </div>
                 {leftItem?.pdfUrl ? (
-                  <a
-                    className="openBtn"
-                    href={leftItem.pdfUrl}
-                    target="_blank"
-                    rel="noreferrer"
-                  >
+                  <a className="openBtn" href={leftItem.pdfUrl} target="_blank" rel="noreferrer">
                     Open
                   </a>
                 ) : null}
               </div>
 
               {leftItem?.pdfUrl ? (
-                <iframe
-                  className="pdfFrame"
-                  src={leftItem.pdfUrl}
-                  title="Left PDF"
-                />
+                <iframe className="pdfFrame" src={leftItem.pdfUrl} title="Left PDF" />
               ) : (
-                <div className="pdfEmpty">
-                  <div className="emptyTitle">PDF link not connected yet</div>
-                  <div className="emptySub">
-                    Once we hook the presign endpoint, the PDF will render here.
-                  </div>
-                </div>
+                <div className="pdfEmpty">Select a report and click “View Left”.</div>
               )}
             </div>
 
@@ -742,43 +643,25 @@ export default function App() {
                 <div className="paneMeta">
                   {rightItem ? (
                     <>
-                      <span className="mono">
-                        {rightItem.instantId || rightItem.id}
-                      </span>
+                      <span className="mono">{rightItem.instantId || rightItem.id}</span>
                       <span className="dot">•</span>
-                      <span className="mutedSmall">
-                        {rightItem.title || rightItem.topic}
-                      </span>
+                      <span className="mutedSmall">{rightItem.title || rightItem.topic}</span>
                     </>
                   ) : (
                     <span className="mutedSmall">No selection</span>
                   )}
                 </div>
                 {rightItem?.pdfUrl ? (
-                  <a
-                    className="openBtn"
-                    href={rightItem.pdfUrl}
-                    target="_blank"
-                    rel="noreferrer"
-                  >
+                  <a className="openBtn" href={rightItem.pdfUrl} target="_blank" rel="noreferrer">
                     Open
                   </a>
                 ) : null}
               </div>
 
               {rightItem?.pdfUrl ? (
-                <iframe
-                  className="pdfFrame"
-                  src={rightItem.pdfUrl}
-                  title="Right PDF"
-                />
+                <iframe className="pdfFrame" src={rightItem.pdfUrl} title="Right PDF" />
               ) : (
-                <div className="pdfEmpty">
-                  <div className="emptyTitle">PDF link not connected yet</div>
-                  <div className="emptySub">
-                    Once we hook the presign endpoint, the PDF will render here.
-                  </div>
-                </div>
+                <div className="pdfEmpty">Select a report and click “View Right”.</div>
               )}
             </div>
           </div>
@@ -786,8 +669,7 @@ export default function App() {
       </div>
 
       <footer className="footer">
-        Tip: Generate multiple reports with small topic tweaks and compare
-        quality side-by-side.
+        Tip: Generate multiple reports with small prompt tweaks and compare.
       </footer>
     </div>
   );
