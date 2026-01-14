@@ -61,13 +61,12 @@ function buildErrorMessage(res, data, fallback) {
   return base || fallback || `HTTP ${res?.status || "error"}`;
 }
 
-// Helper: add cache-buster to iframe src
-function withBuster(url) {
+function withFragmentBuster(url) {
   if (!url) return url;
-  const u = new URL(url, window.location.origin);
-  u.searchParams.set("_ts", String(Date.now()));
-  return u.toString();
+  const base = url.split("#")[0]; // strip existing fragment if any
+  return `${base}#ts=${Date.now()}`;
 }
+
 
 export default function App() {
   // ENV (set these in Amplify env vars)
@@ -341,7 +340,7 @@ export default function App() {
         s3Key: finalS3Key,
       });
 
-      const finalUrl = withBuster(presignedUrl);
+      const finalUrl = withFragmentBuster(presignedUrl);
 
       upsertHistoryItem(historyId, {
         status: "done",
