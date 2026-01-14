@@ -14,8 +14,6 @@ const DEFAULT_QUESTIONS = [
 ];
 
 const STORAGE_KEY = "rbr_instant_lab_history_v1";
-
-// For the POST confirm call — keep below API GW ~29s cap
 const CLIENT_TIMEOUT_MS = 25000;
 
 function loadHistory() {
@@ -32,13 +30,15 @@ function loadHistory() {
 function saveHistory(items) {
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(items));
-  } catch {
-    // ignore
-  }
+  } catch {}
 }
 
 function nowIso() {
   return new Date().toISOString();
+}
+
+function clamp(n, a, b) {
+  return Math.max(a, Math.min(b, n));
 }
 
 async function fetchJsonWithTimeout(url, options, timeoutMs) {
@@ -71,18 +71,13 @@ function buildErrorMessage(res, data, fallback) {
   if (res?.status === 504) {
     return `Upstream timeout (OpenAI). Try again. Details: ${base}`;
   }
-
   return base || fallback || `HTTP ${res?.status || "error"}`;
 }
 
-// Small helper: ensure we always have a status URL
-function deriveStatusUrl(apiUrl, explicitStatusUrl) {
+function deriveStatusUrl(confirmUrl, explicitStatusUrl) {
   if (explicitStatusUrl) return explicitStatusUrl;
-
-  // Try to derive from confirm URL:
-  // e.g. .../instant-report/confirm -> .../instant-report/status
   try {
-    const u = new URL(apiUrl);
+    const u = new URL(confirmUrl);
     u.pathname = u.pathname.replace(/\/confirm\/?$/, "/status");
     return u.toString();
   } catch {
@@ -90,13 +85,26 @@ function deriveStatusUrl(apiUrl, explicitStatusUrl) {
   }
 }
 
-function clamp(n, a, b) {
-  return Math.max(a, Math.min(b, n));
+function fmtTime(iso) {
+  try {
+    return new Date(iso).toLocaleString();
+  } catch {
+    return "-";
+  }
+}
+
+function statusTone(s) {
+  const st = (s || "").toLowerCase();
+  if (st === "done") return "pillGood";
+  if (st === "failed") return "pillBad";
+  if (st === "running") return "pillInfo";
+  if (st === "queued") return "pillSoft";
+  return "pillSoft";
 }
 
 export default function App() {
-  const API_URL = import.meta.env.VITE_API_URL; // POST confirm endpoint
-  const STATUS_URL = deriveStatusUrl(API_URL, import.meta.env.VITE_STATUS_URL); // GET status endpoint
+  const API_URL = import.meta.env.VITE_API_URL; // POST /instant-report/confirm
+  const STATUS_URL = deriveStatusUrl(API_URL, import.meta.env.VITE_STATUS_URL);
 
   const [topic, setTopic] = useState("FMCG market report India");
   const [questions, setQuestions] = useState(DEFAULT_QUESTIONS);
@@ -104,28 +112,25 @@ export default function App() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
-  // Debug panel
   const [lastApiResponse, setLastApiResponse] = useState(null);
-
   const [history, setHistory] = useState(() => loadHistory());
+
   const [leftId, setLeftId] = useState(null);
   const [rightId, setRightId] = useState(null);
   const [leftHidden, setLeftHidden] = useState(false);
 
-  // ===== Modal / progress state =====
+  // Fancy modal
   const [modalOpen, setModalOpen] = useState(false);
   const [modalTitle, setModalTitle] = useState("Generating your report…");
   const [modalHint, setModalHint] = useState("This can take up to 2 minutes.");
   const [progressPct, setProgressPct] = useState(0);
-  const [jobInfo, setJobInfo] = useState(null); // { userPhone, instantId, query, createdAt }
+  const [jobInfo, setJobInfo] = useState(null);
 
   const pollTimerRef = useRef(null);
   const progressTimerRef = useRef(null);
   const pollAbortRef = useRef(null);
 
-  useEffect(() => {
-    saveHistory(history);
-  }, [history]);
+  useEffect(() => saveHistory(history), [history]);
 
   useEffect(() => {
     if (!history.length) return;
@@ -174,29 +179,29 @@ export default function App() {
 
   async function pollStatusUntilDone({ userPhone, instantId }) {
     if (!STATUS_URL) {
-      throw new Error("Status API URL is missing. Set VITE_STATUS_URL in Amplify env vars.");
+      throw new Error(
+        "Status API URL missing. Set VITE_STATUS_URL in Amplify env vars."
+      );
     }
 
     const startedAt = Date.now();
 
-    // Smooth progress animation: slowly climbs; last 10% only when done
-    setProgressPct(5);
+    // Smooth progress to 90%
+    setProgressPct(8);
     progressTimerRef.current = setInterval(() => {
-      setProgressPct((p) => {
-        // climb slowly towards 90%
-        const next = p + (p < 60 ? 3 : p < 80 ? 2 : 1);
-        return clamp(next, 0, 90);
-      });
-    }, 1800);
+      setProgressPct((p) => clamp(p + (p < 60 ? 3 : p < 85 ? 2 : 1), 0, 90));
+    }, 1600);
 
-    // Poll every POLL_EVERY_MS
     pollAbortRef.current = new AbortController();
 
     async function checkOnce() {
       const qs = new URLSearchParams({ userPhone, instantId });
       const url = `${STATUS_URL}?${qs.toString()}`;
 
-      const res = await fetch(url, { method: "GET", signal: pollAbortRef.current.signal });
+      const res = await fetch(url, {
+        method: "GET",
+        signal: pollAbortRef.current.signal,
+      });
       const text = await res.text();
       let data = {};
       try {
@@ -204,46 +209,43 @@ export default function App() {
       } catch {
         data = { raw: text };
       }
-
-      // Helpful for debugging
       setLastApiResponse(data);
 
-      if (!res.ok) {
+      if (!res.ok || !data?.ok) {
         throw new Error(buildErrorMessage(res, data, "Status check failed"));
       }
 
       const status = (data?.status || "").toLowerCase();
 
       if (status === "failed") {
-        throw new Error(data?.error || "Report generation failed in worker.");
+        throw new Error(data?.error || "Worker failed.");
       }
 
       if (status === "done") {
-        // Mark progress complete
         setProgressPct(100);
         setModalTitle("Report ready ✅");
-        setModalHint("Opening the PDF…");
+        setModalHint("Saving to your lab history…");
         return data;
       }
 
-      // queued / running / etc
       const elapsed = Date.now() - startedAt;
       const secs = Math.floor(elapsed / 1000);
-      setModalTitle(status === "running" ? "Generating your report…" : "Queued…");
+
+      setModalTitle(status === "running" ? "Generating…" : "Queued…");
       setModalHint(`Status: ${status || "unknown"} • ${secs}s elapsed`);
 
       if (elapsed > MAX_WAIT_MS) {
-        throw new Error("Still not done after 2 minutes. Please try again or check worker logs.");
+        throw new Error(
+          "Still not done after 2 minutes. Please try again or check worker logs."
+        );
       }
 
       return null;
     }
 
-    // First check immediately
     let out = await checkOnce();
     if (out) return out;
 
-    // Then interval checks
     return new Promise((resolve, reject) => {
       pollTimerRef.current = setInterval(async () => {
         try {
@@ -268,7 +270,9 @@ export default function App() {
     const qs = questions.map((q) => (q || "").trim());
 
     if (!API_URL) {
-      setError("VITE_API_URL is not set. Add it in Amplify env vars and redeploy.");
+      setError(
+        "VITE_API_URL is not set. Add it in Amplify env vars and redeploy."
+      );
       return;
     }
     if (!t) {
@@ -282,11 +286,11 @@ export default function App() {
 
     setLoading(true);
 
-    // Open modal immediately
+    // Open fancy modal
     setModalOpen(true);
     setModalTitle("Starting…");
     setModalHint("Submitting request to server…");
-    setProgressPct(2);
+    setProgressPct(3);
 
     try {
       const payload = {
@@ -296,7 +300,7 @@ export default function App() {
         questions: qs,
       };
 
-      // 1) POST confirm -> returns queued job { userPhone, instantId }
+      // 1) Confirm -> queued
       const { res, data } = await fetchJsonWithTimeout(
         API_URL,
         {
@@ -314,7 +318,7 @@ export default function App() {
       }
 
       if (!data?.userPhone || !data?.instantId) {
-        throw new Error("Confirm API did not return userPhone/instantId (required for polling).");
+        throw new Error("Confirm API did not return userPhone/instantId.");
       }
 
       const job = {
@@ -327,52 +331,38 @@ export default function App() {
 
       setModalTitle("Queued…");
       setModalHint("Worker started. Generating PDF…");
-      setProgressPct(10);
+      setProgressPct(12);
 
-      // 2) Poll status endpoint until done (<=2 mins)
-      const statusData = await pollStatusUntilDone({
-        userPhone: job.userPhone,
-        instantId: job.instantId,
-      });
-
-      // statusData expected to include: status, s3Key, pdfUrl, title, subtitle, etc.
-      const pdfUrl = statusData?.pdfUrl || "";
-      const title = statusData?.title || t;
+      // 2) Poll status endpoint
+      const statusData = await pollStatusUntilDone(job);
 
       const newItem = {
         id: `${job.instantId || (crypto.randomUUID?.() ?? Date.now())}`,
-        createdAt: job.createdAt,
+        createdAt: statusData?.createdAt || job.createdAt,
         topic: t,
-        title,
+        title: statusData?.title || t,
         instantId: job.instantId,
+
+        // NOTE: pdfUrl can be calmly empty for now (you will plug presign API later)
+        pdfUrl: statusData?.pdfUrl || "",
+
+        status: statusData?.status || "done",
+        s3Bucket: statusData?.s3Bucket || "",
         s3Key: statusData?.s3Key || "",
-        pdfUrl,
         apiResponse: { confirm: data, status: statusData },
       };
 
       setHistory((prev) => [newItem, ...prev].slice(0, 200));
-
-      // push newest to left viewer, previous left shifts to right
       setRightId((prevRight) => leftId || prevRight);
       setLeftId(newItem.id);
 
-      // close modal after a tiny moment so user sees "ready"
-      setTimeout(() => closeModal(), 600);
+      setTimeout(() => closeModal(), 700);
     } catch (e) {
-      if (e?.name === "AbortError") {
-        setError(
-          `Client timeout after ${Math.round(
-            CLIENT_TIMEOUT_MS / 1000
-          )}s while calling confirm API. Try again.`
-        );
-      } else {
-        setError(e?.message || "Server error");
-      }
-      // keep modal open briefly so user sees it, then close
       setModalTitle("Failed ❌");
       setModalHint(e?.message || "Something went wrong.");
       setProgressPct(0);
-      setTimeout(() => closeModal(), 1200);
+      setError(e?.message || "Server error");
+      setTimeout(() => closeModal(), 1400);
     } finally {
       setLoading(false);
     }
@@ -412,96 +402,43 @@ export default function App() {
     setRightId(null);
     try {
       localStorage.removeItem(STORAGE_KEY);
-    } catch {
-      // ignore
-    }
+    } catch {}
   }
-
-  // Close modal on Esc
-  useEffect(() => {
-    function onKey(e) {
-      if (e.key === "Escape" && modalOpen) closeModal();
-    }
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [modalOpen]);
 
   return (
     <div className="page">
-      {/* ===== POPUP MODAL ===== */}
+      {/* Fancy modal */}
       {modalOpen && (
-        <div
-          style={{
-            position: "fixed",
-            inset: 0,
-            background: "rgba(0,0,0,0.55)",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            zIndex: 9999,
-            padding: 16,
-          }}
-          onClick={closeModal}
-        >
-          <div
-            onClick={(e) => e.stopPropagation()}
-            style={{
-              width: "min(560px, 96vw)",
-              borderRadius: 14,
-              background: "#0f1628",
-              border: "1px solid rgba(255,255,255,0.10)",
-              boxShadow: "0 12px 40px rgba(0,0,0,0.35)",
-              padding: 18,
-            }}
-          >
-            <div style={{ display: "flex", justifyContent: "space-between", gap: 12 }}>
+        <div className="modalOverlay">
+          <div className="modalCard">
+            <div className="modalHeader">
               <div>
-                <div style={{ fontSize: 16, fontWeight: 700, color: "#e8eefc" }}>
-                  {modalTitle}
-                </div>
-                <div style={{ marginTop: 6, fontSize: 12, color: "rgba(232,238,252,0.75)" }}>
-                  {modalHint}
-                </div>
+                <div className="modalTitle">{modalTitle}</div>
+                <div className="modalHint">{modalHint}</div>
                 {jobInfo?.instantId ? (
-                  <div style={{ marginTop: 10, fontSize: 12, color: "rgba(232,238,252,0.7)" }}>
-                    <span style={{ fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace" }}>
-                      {jobInfo.instantId}
-                    </span>
+                  <div className="modalMeta mono">
+                    {jobInfo.instantId} • {jobInfo.userPhone}
                   </div>
                 ) : null}
               </div>
-
-              <button
-                className="btnSecondary"
-                onClick={closeModal}
-                style={{ height: 34 }}
-                title="Close"
-              >
+              <button className="btnSecondary" onClick={closeModal}>
                 Close
               </button>
             </div>
 
-            <div style={{ marginTop: 14 }}>
-              <div
-                style={{
-                  height: 10,
-                  width: "100%",
-                  background: "rgba(255,255,255,0.10)",
-                  borderRadius: 999,
-                  overflow: "hidden",
-                }}
-              >
-                <div
-                  style={{
-                    height: "100%",
-                    width: `${progressPct}%`,
-                    background: "rgba(232,238,252,0.85)",
-                    transition: "width 350ms ease",
-                  }}
-                />
+            <div className="barWrap">
+              <div className="barBg">
+                <div className="barFg" style={{ width: `${progressPct}%` }} />
               </div>
-              <div style={{ marginTop: 8, fontSize: 12, color: "rgba(232,238,252,0.75)" }}>
-                {progressPct}% • Please keep this tab open.
+              <div className="barText">
+                {progressPct}% • Please keep this tab open
+              </div>
+            </div>
+
+            <div className="modalFoot">
+              <div className="mutedSmall">
+                Polling every {POLL_EVERY_MS / 1000}s • Max wait{" "}
+                {MAX_WAIT_MS / 1000}s
               </div>
             </div>
           </div>
@@ -510,24 +447,38 @@ export default function App() {
 
       <header className="topbar">
         <div className="topbarLeft">
-          <div className="brand">RBR Instant Lite Lab</div>
+          <div className="brandRow">
+            <div className="brand">RBR Instant Lite Lab</div>
+            <span className="pill">Employee</span>
+            <span className="pill pillSoft">Async worker</span>
+          </div>
           <div className="sub">
-            Internal testing page — generate PDFs via your existing API + Lambda
+            Internal testing page — generate reports and compare quality side by
+            side.
           </div>
         </div>
 
         <div className="topbarRight">
-          <button className="btnSecondary" onClick={() => setLeftHidden((v) => !v)}>
+          <button
+            className="btnSecondary"
+            onClick={() => setLeftHidden((v) => !v)}
+          >
             {leftHidden ? "Show Inputs" : "Hide Inputs"}
           </button>
         </div>
       </header>
 
       <div className={`layout ${leftHidden ? "layoutFull" : ""}`}>
+        {/* LEFT PANEL */}
         {!leftHidden && (
           <aside className="left">
-            <div className="card">
-              <div className="cardTitle">Generate</div>
+            <div className="card glass">
+              <div className="cardTitleRow">
+                <div className="cardTitle">Generate</div>
+                <div className="mutedSmall">
+                  Max wait: {MAX_WAIT_MS / 1000}s
+                </div>
+              </div>
 
               <label className="label">Topic</label>
               <input
@@ -537,20 +488,26 @@ export default function App() {
                 placeholder="e.g., FMCG market report India"
               />
 
-              {questions.map((q, i) => (
-                <div key={i} style={{ marginTop: 10 }}>
-                  <label className="label">Question {i + 1}</label>
-                  <textarea
-                    className="textarea"
-                    value={q}
-                    onChange={(e) => updateQuestion(i, e.target.value)}
-                    rows={2}
-                  />
-                </div>
-              ))}
+              <div className="qGrid">
+                {questions.map((q, i) => (
+                  <div key={i}>
+                    <label className="label">Question {i + 1}</label>
+                    <textarea
+                      className="textarea"
+                      value={q}
+                      onChange={(e) => updateQuestion(i, e.target.value)}
+                      rows={2}
+                    />
+                  </div>
+                ))}
+              </div>
 
               <div className="actions">
-                <button className="btn" onClick={generate} disabled={loading}>
+                <button
+                  className="btnPrimary"
+                  onClick={generate}
+                  disabled={loading}
+                >
                   {loading ? "Generating…" : "Generate PDF"}
                 </button>
 
@@ -558,84 +515,134 @@ export default function App() {
                   className="btnSecondary"
                   onClick={retry}
                   disabled={loading}
-                  title="Retry the same request"
                 >
                   Retry
                 </button>
 
                 <button
-                  className="btnSecondary"
+                  className="btnDanger"
                   onClick={clearHistory}
                   disabled={!history.length || loading}
                 >
-                  Clear history
+                  Clear
                 </button>
               </div>
 
-              <div className="apiLine">
-                <span className="apiLabel">Confirm API:</span>{" "}
-                <span className="apiValue">{API_URL || "(missing VITE_API_URL)"}</span>
-              </div>
-
-              <div className="apiLine">
-                <span className="apiLabel">Status API:</span>{" "}
-                <span className="apiValue">{STATUS_URL || "(missing VITE_STATUS_URL)"}</span>
-              </div>
-
-              <div className="apiLine">
-                <span className="apiLabel">Confirm timeout:</span>{" "}
-                <span className="apiValue">{CLIENT_TIMEOUT_MS / 1000}s</span>
+              <div className="kv">
+                <div className="kvRow">
+                  <span className="kvKey">Confirm API</span>
+                  <span className="kvVal mono">
+                    {API_URL || "(missing VITE_API_URL)"}
+                  </span>
+                </div>
+                <div className="kvRow">
+                  <span className="kvKey">Status API</span>
+                  <span className="kvVal mono">
+                    {STATUS_URL || "(missing VITE_STATUS_URL)"}
+                  </span>
+                </div>
               </div>
 
               {error ? <div className="errorBox">Error: {error}</div> : null}
             </div>
 
             <div className="card" style={{ marginTop: 12 }}>
-              <div className="cardTitle">Generated PDFs</div>
+              <div className="cardTitleRow">
+                <div className="cardTitle">Generated Reports</div>
+                <div className="mutedSmall">{history.length} items</div>
+              </div>
 
               {!history.length ? (
-                <div className="empty">No PDFs yet. Generate one to start comparing.</div>
+                <div className="emptyFancy">
+                  <div className="emptyTitle">No reports yet</div>
+                  <div className="emptySub">
+                    Generate your first instant report to start comparing.
+                  </div>
+                </div>
               ) : (
                 <div className="tableWrap">
                   <table className="table">
                     <thead>
                       <tr>
-                        <th style={{ width: 140 }}>Time</th>
+                        <th style={{ width: 150 }}>Time</th>
                         <th>Title / Topic</th>
-                        <th style={{ width: 120 }}>Instant ID</th>
-                        <th style={{ width: 280 }}>Actions</th>
+                        <th style={{ width: 130 }}>Instant ID</th>
+                        <th style={{ width: 320 }}>Actions</th>
                       </tr>
                     </thead>
                     <tbody>
                       {history.map((h) => {
-                        const dt = h.createdAt ? new Date(h.createdAt) : null;
-                        const timeStr = dt ? dt.toLocaleString() : "-";
                         const isLeft = h.id === leftId;
                         const isRight = h.id === rightId;
 
                         return (
-                          <tr key={h.id} className={isLeft || isRight ? "rowSelected" : ""}>
-                            <td className="mono">{timeStr}</td>
+                          <tr
+                            key={h.id}
+                            className={isLeft || isRight ? "rowSelected" : ""}
+                          >
+                            <td className="mono">{fmtTime(h.createdAt)}</td>
                             <td>
-                              <div className="titleCell">{h.title || h.topic}</div>
+                              <div className="titleRow">
+                                <div className="titleCell">
+                                  {h.title || h.topic}
+                                </div>
+                                <span className={`pill ${statusTone(h.status)}`}>
+                                  {h.status || "done"}
+                                </span>
+                              </div>
                               <div className="mutedSmall">{h.topic}</div>
+
+                              {h.status === "done" && !h.pdfUrl ? (
+                                <div className="warnSmall">
+                                  Report ready. PDF link will appear after we
+                                  plug the presign endpoint.
+                                </div>
+                              ) : null}
                             </td>
                             <td className="mono">{h.instantId || "-"}</td>
                             <td>
                               <div className="rowActions">
-                                <button className="chip" onClick={() => setLeft(h.id)}>
+                                <button
+                                  className="chip"
+                                  onClick={() => setLeft(h.id)}
+                                >
                                   {isLeft ? "Viewing Left" : "View Left"}
                                 </button>
-                                <button className="chip" onClick={() => setRight(h.id)}>
+                                <button
+                                  className="chip"
+                                  onClick={() => setRight(h.id)}
+                                >
                                   {isRight ? "Viewing Right" : "View Right"}
                                 </button>
-                                <a className="chipLink" href={h.pdfUrl} target="_blank" rel="noreferrer">
-                                  Open
-                                </a>
-                                <button className="chipDanger" onClick={() => removeItem(h.id)}>
+
+                                {h.pdfUrl ? (
+                                  <a
+                                    className="chipLink"
+                                    href={h.pdfUrl}
+                                    target="_blank"
+                                    rel="noreferrer"
+                                  >
+                                    Open
+                                  </a>
+                                ) : (
+                                  <span className="chipDisabled" title="No PDF link yet">
+                                    Open
+                                  </span>
+                                )}
+
+                                <button
+                                  className="chipDanger"
+                                  onClick={() => removeItem(h.id)}
+                                >
                                   Remove
                                 </button>
                               </div>
+
+                              {h.s3Bucket && h.s3Key ? (
+                                <div className="mutedTiny mono">
+                                  {h.s3Bucket}/{h.s3Key}
+                                </div>
+                              ) : null}
                             </td>
                           </tr>
                         );
@@ -646,21 +653,36 @@ export default function App() {
               )}
             </div>
 
+            {/* Debug (optional) */}
             {lastApiResponse ? (
               <div className="card" style={{ marginTop: 12 }}>
-                <div className="cardTitle">API Response (debug)</div>
-                <pre className="debugPre">{JSON.stringify(lastApiResponse, null, 2)}</pre>
+                <div className="cardTitleRow">
+                  <div className="cardTitle">API Response (debug)</div>
+                  <div className="mutedSmall">latest</div>
+                </div>
+                <pre className="debugPre">
+                  {JSON.stringify(lastApiResponse, null, 2)}
+                </pre>
               </div>
             ) : null}
           </aside>
         )}
 
+        {/* RIGHT PANEL */}
         <main className="right">
           <div className="compareHeader">
-            <div className="compareTitle">Compare PDFs</div>
-            <div className="compareHint">
-              Pick any two PDFs from the table (View Left / View Right). Use “Hide Inputs” to maximize
-              space.
+            <div>
+              <div className="compareTitle">Compare Reports</div>
+              <div className="compareHint">
+                Pick any two reports from the table (View Left / View Right).
+                Hide inputs for maximum space.
+              </div>
+            </div>
+            <div className="compareBadges">
+              <span className="pill pillSoft">
+                Poll: {POLL_EVERY_MS / 1000}s
+              </span>
+              <span className="pill">Max: {MAX_WAIT_MS / 1000}s</span>
             </div>
           </div>
 
@@ -671,25 +693,43 @@ export default function App() {
                 <div className="paneMeta">
                   {leftItem ? (
                     <>
-                      <span className="mono">{leftItem.instantId || leftItem.id}</span>
+                      <span className="mono">
+                        {leftItem.instantId || leftItem.id}
+                      </span>
                       <span className="dot">•</span>
-                      <span className="mutedSmall">{leftItem.title || leftItem.topic}</span>
+                      <span className="mutedSmall">
+                        {leftItem.title || leftItem.topic}
+                      </span>
                     </>
                   ) : (
                     <span className="mutedSmall">No selection</span>
                   )}
                 </div>
                 {leftItem?.pdfUrl ? (
-                  <a className="openBtn" href={leftItem.pdfUrl} target="_blank" rel="noreferrer">
+                  <a
+                    className="openBtn"
+                    href={leftItem.pdfUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
                     Open
                   </a>
                 ) : null}
               </div>
 
               {leftItem?.pdfUrl ? (
-                <iframe className="pdfFrame" src={leftItem.pdfUrl} title="Left PDF" />
+                <iframe
+                  className="pdfFrame"
+                  src={leftItem.pdfUrl}
+                  title="Left PDF"
+                />
               ) : (
-                <div className="pdfEmpty">Select a PDF and click “View Left”.</div>
+                <div className="pdfEmpty">
+                  <div className="emptyTitle">PDF link not connected yet</div>
+                  <div className="emptySub">
+                    Once we hook the presign endpoint, the PDF will render here.
+                  </div>
+                </div>
               )}
             </div>
 
@@ -699,25 +739,43 @@ export default function App() {
                 <div className="paneMeta">
                   {rightItem ? (
                     <>
-                      <span className="mono">{rightItem.instantId || rightItem.id}</span>
+                      <span className="mono">
+                        {rightItem.instantId || rightItem.id}
+                      </span>
                       <span className="dot">•</span>
-                      <span className="mutedSmall">{rightItem.title || rightItem.topic}</span>
+                      <span className="mutedSmall">
+                        {rightItem.title || rightItem.topic}
+                      </span>
                     </>
                   ) : (
                     <span className="mutedSmall">No selection</span>
                   )}
                 </div>
                 {rightItem?.pdfUrl ? (
-                  <a className="openBtn" href={rightItem.pdfUrl} target="_blank" rel="noreferrer">
+                  <a
+                    className="openBtn"
+                    href={rightItem.pdfUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
                     Open
                   </a>
                 ) : null}
               </div>
 
               {rightItem?.pdfUrl ? (
-                <iframe className="pdfFrame" src={rightItem.pdfUrl} title="Right PDF" />
+                <iframe
+                  className="pdfFrame"
+                  src={rightItem.pdfUrl}
+                  title="Right PDF"
+                />
               ) : (
-                <div className="pdfEmpty">Select a PDF and click “View Right”.</div>
+                <div className="pdfEmpty">
+                  <div className="emptyTitle">PDF link not connected yet</div>
+                  <div className="emptySub">
+                    Once we hook the presign endpoint, the PDF will render here.
+                  </div>
+                </div>
               )}
             </div>
           </div>
@@ -725,8 +783,8 @@ export default function App() {
       </div>
 
       <footer className="footer">
-        Tip: Hide inputs to maximize PDF space. Generate multiple PDFs with small question tweaks and
-        compare.
+        Tip: Generate multiple reports with small topic tweaks and compare
+        quality side-by-side.
       </footer>
     </div>
   );
