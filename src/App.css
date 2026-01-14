@@ -16,10 +16,7 @@
 * {
   box-sizing: border-box;
 }
-html,
-body {
-  height: 100%;
-}
+
 body {
   margin: 0;
   color: var(--text);
@@ -32,9 +29,8 @@ body {
 
 html, body {
   height: 100%;
-  overflow-x: hidden;
-  overflow: hidden;
   margin: 0;
+  overflow: auto;   /* ✅ not hidden */
 }
 
 body {
@@ -52,27 +48,12 @@ body {
   min-height: 100vh;
   display: flex;
   flex-direction: column;
-
-  /* ✅ ensures content never begins above viewport */
-  padding-top: 0;
-  overflow: hidden;
 }
 
 .topbar {
-  padding: 18px 18px 12px;
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 14px;
-
-  /* ✅ prevents “content under header” issues */
   position: sticky;
   top: 0;
   z-index: 50;
-
-  background: rgba(7, 11, 20, 0.72);
-  backdrop-filter: blur(10px);
-  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
 }
 
 .brandRow {
@@ -95,22 +76,31 @@ body {
 
 .layout {
   flex: 1;
-  min-height: 0;
+  min-height: 0; /* still important */
   display: grid;
   grid-template-columns: 460px 1fr;
   gap: 14px;
   padding: 12px 14px 14px;
-  overflow: hidden;
 }
 .layoutFull {
   grid-template-columns: 1fr;
 }
 
-/* ✅ Make LEFT panel scrollable */
+.layout.layoutFull {
+  grid-template-columns: 1fr;
+}
+
 .left {
-  min-height: 0;       /* ✅ critical */
-  overflow-y: auto;    /* ✅ */
-  padding-right: 6px;  /* small scrollbar breathing room */
+  min-height: 0;
+  max-height: calc(100vh - 110px); /* tweak if your header height differs */
+  overflow-y: auto;
+  padding-right: 6px;
+}
+
+.right {
+  min-height: 0;
+  max-height: calc(100vh - 110px); /* tweak if your header height differs */
+  overflow-y: auto;
 }
 
 .page, .layout, .topbar {
