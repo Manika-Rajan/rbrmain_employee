@@ -133,6 +133,9 @@ export default function App() {
   useEffect(() => saveHistory(history), [history]);
 
   useEffect(() => {
+    // ✅ On refresh, ensure page starts at the top of LEFT panel
+    const left = document.querySelector(".left");
+    if (left) left.scrollTop = 0;
     if (!history.length) return;
     const sorted = [...history].sort(
       (a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0)
