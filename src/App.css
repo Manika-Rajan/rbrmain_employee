@@ -24,14 +24,14 @@
 
   --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
 
-  /* ✅ Single source of truth for sticky header height */
+  /* Reserved sticky header height */
   --header-h: 124px;
 }
 
 *{ box-sizing:border-box; }
 html, body { height: 100%; }
 
-/* Helps when clicking inside the page / focusing inputs so they don't hide under sticky header */
+/* Helps focus/scroll jumps avoid getting hidden under the sticky header */
 html { scroll-padding-top: var(--header-h); }
 
 body{
@@ -47,6 +47,7 @@ body{
   overflow-x: hidden;
 }
 
+/* Whole page wrapper */
 .page{
   position: relative;
   min-height: 100vh;
@@ -54,7 +55,7 @@ body{
   padding: 14px;
 }
 
-/* Aurora */
+/* Animated aurora */
 .aurora{
   position: absolute;
   inset: -40px;
@@ -73,6 +74,7 @@ body{
   to  { transform: translate3d(12px, 10px, 0) scale(1.03); }
 }
 
+/* Subtle noise overlay */
 .noise{
   position: absolute;
   inset: 0;
@@ -97,10 +99,10 @@ body{
   backdrop-filter: blur(12px);
 }
 
-/* Shell */
+/* Shell is a "page card" that can grow with content */
 .shell{
   position: relative;
-  z-index: 1;
+  z-index: 1; /* above aurora/noise */
   min-height: calc(100vh - 28px);
   height: auto;
 
@@ -112,14 +114,22 @@ body{
 
   display: flex;
   flex-direction: column;
+
   overflow: visible;
+
+  /* ✅ Reserve permanent space for the sticky header
+     so content never slides under it while scrolling */
+  padding-top: var(--header-h);
 }
 
-/* ✅ Sticky header that DOES NOT visually overlap content */
+/* ✅ STICKY HEADER (non-overlapping) */
 .topbar{
   position: sticky;
   top: 0;
   z-index: 50;
+
+  height: var(--header-h);
+  margin-top: calc(-1 * var(--header-h));
 
   padding: 14px 16px;
   border-bottom: 1px solid rgba(255,255,255,.12);
@@ -128,16 +138,13 @@ body{
   justify-content: space-between;
   gap: 16px;
 
-  /* More opaque + shadow so content won't look "under" it */
+  /* sticky glass look */
   background: linear-gradient(180deg, rgba(8,10,24,.92), rgba(8,10,24,.74));
   backdrop-filter: blur(18px);
   box-shadow: 0 10px 30px rgba(0,0,0,.35);
-
-  /* Keeps layout consistent across browsers */
-  min-height: var(--header-h);
 }
 
-/* Topbar content */
+/* topbar content */
 .brandRow{ display:flex; align-items:center; gap:10px; }
 .brand{ font-weight: 900; letter-spacing: .3px; font-size: 18px; }
 .pill{
@@ -175,21 +182,21 @@ body{
 
 .topbarRight{ display:flex; align-items:flex-start; gap: 10px; }
 
-/* ✅ Add safe spacing below sticky header so content never appears under it */
+/* Main body area */
 .body{
-  flex: 0 0 auto;
+  flex: 0 0 auto;      /* ✅ allow natural page height */
   display: grid;
   grid-template-columns: 520px 1fr;
   gap: 12px;
-
   padding: 12px;
-  padding-top: 16px; /* important spacing */
-  overflow: visible;
+
+  overflow: visible;   /* ✅ let page expand */
 }
 .bodyFull{ grid-template-columns: 1fr; }
 
 .left, .right{ min-width: 0; }
 
+/* Whole page scroll: no internal panel scrolling */
 .panelScroll{
   height: auto;
   overflow: visible;
@@ -552,7 +559,7 @@ body{
 
 /* Responsive */
 @media (max-width: 1100px){
-  :root { --header-h: 156px; } /* header stacks more on small screens */
+  :root { --header-h: 156px; }
   .body{ grid-template-columns: 1fr; }
   .pdfGrid{ grid-template-columns: 1fr; }
   .pdfFill{ height: 70vh; min-height: 520px; }
