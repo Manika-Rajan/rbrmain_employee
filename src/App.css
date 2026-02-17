@@ -9,9 +9,9 @@
   --text:#EEF2FF;
   --muted: rgba(238,242,255,.68);
 
-  --a:#8B5CF6;     /* violet */
-  --b:#22D3EE;     /* cyan */
-  --c:#F472B6;     /* pink */
+  --a:#8B5CF6;
+  --b:#22D3EE;
+  --c:#F472B6;
 
   --good:#22C55E;
   --warn:#F59E0B;
@@ -23,10 +23,16 @@
   --r2: 14px;
 
   --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+
+  /* ✅ Single source of truth for sticky header height */
+  --header-h: 124px;
 }
 
 *{ box-sizing:border-box; }
 html, body { height: 100%; }
+
+/* Helps when clicking inside the page / focusing inputs so they don't hide under sticky header */
+html { scroll-padding-top: var(--header-h); }
 
 body{
   margin:0;
@@ -37,13 +43,10 @@ body{
     radial-gradient(700px 450px at 40% 110%, rgba(244,114,182,.16), transparent 60%),
     linear-gradient(180deg, var(--bg0), var(--bg1));
   font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial;
-
-  /* ✅ page can scroll normally */
   overflow-y: auto;
   overflow-x: hidden;
 }
 
-/* Whole page wrapper */
 .page{
   position: relative;
   min-height: 100vh;
@@ -51,7 +54,7 @@ body{
   padding: 14px;
 }
 
-/* Animated aurora */
+/* Aurora */
 .aurora{
   position: absolute;
   inset: -40px;
@@ -70,7 +73,6 @@ body{
   to  { transform: translate3d(12px, 10px, 0) scale(1.03); }
 }
 
-/* Subtle noise overlay */
 .noise{
   position: absolute;
   inset: 0;
@@ -95,10 +97,10 @@ body{
   backdrop-filter: blur(12px);
 }
 
-/* Shell is a "page card" that can grow with content */
+/* Shell */
 .shell{
   position: relative;
-  z-index: 1; /* above aurora/noise */
+  z-index: 1;
   min-height: calc(100vh - 28px);
   height: auto;
 
@@ -110,29 +112,32 @@ body{
 
   display: flex;
   flex-direction: column;
-
   overflow: visible;
 }
 
-/* ✅ STICKY HEADER */
+/* ✅ Sticky header that DOES NOT visually overlap content */
 .topbar{
   position: sticky;
   top: 0;
   z-index: 50;
 
   padding: 14px 16px;
-  border-bottom: 1px solid rgba(255,255,255,.10);
+  border-bottom: 1px solid rgba(255,255,255,.12);
 
   display: flex;
   justify-content: space-between;
   gap: 16px;
 
-  /* sticky glass look */
-  background: linear-gradient(180deg, rgba(10,12,30,.78), rgba(10,12,30,.55));
+  /* More opaque + shadow so content won't look "under" it */
+  background: linear-gradient(180deg, rgba(8,10,24,.92), rgba(8,10,24,.74));
   backdrop-filter: blur(18px);
+  box-shadow: 0 10px 30px rgba(0,0,0,.35);
+
+  /* Keeps layout consistent across browsers */
+  min-height: var(--header-h);
 }
 
-/* topbar content */
+/* Topbar content */
 .brandRow{ display:flex; align-items:center; gap:10px; }
 .brand{ font-weight: 900; letter-spacing: .3px; font-size: 18px; }
 .pill{
@@ -170,21 +175,21 @@ body{
 
 .topbarRight{ display:flex; align-items:flex-start; gap: 10px; }
 
-/* Main body area */
+/* ✅ Add safe spacing below sticky header so content never appears under it */
 .body{
-  flex: 0 0 auto;  /* ✅ allow natural height */
+  flex: 0 0 auto;
   display: grid;
   grid-template-columns: 520px 1fr;
   gap: 12px;
-  padding: 12px;
 
-  overflow: visible; /* ✅ let page expand */
+  padding: 12px;
+  padding-top: 16px; /* important spacing */
+  overflow: visible;
 }
 .bodyFull{ grid-template-columns: 1fr; }
 
 .left, .right{ min-width: 0; }
 
-/* ✅ whole page scroll: no internal panel scrolling */
 .panelScroll{
   height: auto;
   overflow: visible;
@@ -403,7 +408,7 @@ body{
   background: rgba(255,255,255,.05);
 }
 
-/* PDFs: fixed nice height so page scroll is meaningful */
+/* PDFs */
 .pdfGrid{
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -451,7 +456,7 @@ body{
 .openBtn:hover{ background: rgba(255,255,255,.12); }
 
 .pdfFill{
-  height: 78vh;     /* ✅ viewer size */
+  height: 78vh;
   min-height: 520px;
 }
 .pdfFrame{
@@ -468,7 +473,6 @@ body{
   justify-content:center;
   padding: 18px;
 }
-
 .fancyEmpty{
   flex-direction: column;
   gap: 10px;
@@ -548,6 +552,7 @@ body{
 
 /* Responsive */
 @media (max-width: 1100px){
+  :root { --header-h: 156px; } /* header stacks more on small screens */
   .body{ grid-template-columns: 1fr; }
   .pdfGrid{ grid-template-columns: 1fr; }
   .pdfFill{ height: 70vh; min-height: 520px; }
