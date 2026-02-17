@@ -13,6 +13,15 @@ const DEFAULT_QUESTIONS = [
   "What is the 3–5 year outlook with opportunities and recommendations?",
 ];
 
+const QUICK_TOPICS = [
+  "FMCG market report India",
+  "EV charging market India",
+  "Restaurant business in India",
+  "Pharma competitor analysis India",
+  "IT industry analysis India",
+  "Paper industry in India",
+];
+
 const STORAGE_KEY = "rbr_instant_lab_history_v2";
 
 function loadHistory() {
@@ -64,8 +73,22 @@ function buildErrorMessage(res, data, fallback) {
 // IMPORTANT: Use fragment buster only (never add query params to presigned URL)
 function withFragmentBuster(url) {
   if (!url) return url;
-  const base = url.split("#")[0]; // strip existing fragment if any
+  const base = url.split("#")[0];
   return `${base}#ts=${Date.now()}`;
+}
+
+function clsx(...parts) {
+  return parts.filter(Boolean).join(" ");
+}
+
+function normalize(s) {
+  return String(s || "").trim().toLowerCase();
+}
+
+function prettyStatus(s) {
+  const x = normalize(s);
+  if (!x) return "unknown";
+  return x;
 }
 
 export default function App() {
@@ -85,6 +108,12 @@ export default function App() {
   const [leftId, setLeftId] = useState(null);
   const [rightId, setRightId] = useState(null);
   const [leftHidden, setLeftHidden] = useState(false);
+
+  // Fancy additions (no dependencies)
+  const [historyQuery, setHistoryQuery] = useState("");
+  const [statusFilter, setStatusFilter] = useState("all");
+  const [showDebug, setShowDebug] = useState(false);
+  const [toast, setToast] = useState("");
 
   // Modal state
   const [modalOpen, setModalOpen] = useState(false);
@@ -122,6 +151,12 @@ export default function App() {
     setRightId((prev) => prev ?? second ?? first);
   }, [history]);
 
+  useEffect(() => {
+    if (!toast) return;
+    const t = setTimeout(() => setToast(""), 1800);
+    return () => clearTimeout(t);
+  }, [toast]);
+
   const leftItem = useMemo(
     () => history.find((x) => x.id === leftId) || null,
     [history, leftId]
@@ -130,6 +165,23 @@ export default function App() {
     () => history.find((x) => x.id === rightId) || null,
     [history, rightId]
   );
+
+  const filteredHistory = useMemo(() => {
+    const q = normalize(historyQuery);
+    const sf = normalize(statusFilter);
+    return [...history].filter((h) => {
+      const matchesQ =
+        !q ||
+        normalize(h.title).includes(q) ||
+        normalize(h.topic).includes(q) ||
+        normalize(h.instantId).includes(q);
+
+      const st = prettyStatus(h.status);
+      const matchesStatus = sf === "all" ? true : st === sf;
+
+      return matchesQ && matchesStatus;
+    });
+  }, [history, historyQuery, statusFilter]);
 
   function updateQuestion(i, val) {
     setQuestions((prev) => prev.map((q, idx) => (idx === i ? val : q)));
@@ -165,7 +217,7 @@ export default function App() {
 
     setModalOpen(true);
     setModalTitle("Generating report…");
-    setModalSub("Queued. Starting worker…");
+    setModalSub("Queued • starting worker");
     setProgressPct(8);
 
     // Smooth progress animation up to 92%
@@ -175,7 +227,7 @@ export default function App() {
         if (p >= 92) return p;
         return Math.min(92, p + 1);
       });
-    }, 900);
+    }, 850);
 
     try {
       while (Date.now() - startedAt < MAX_WAIT_MS) {
@@ -199,7 +251,7 @@ export default function App() {
           throw new Error(buildErrorMessage(res, data, "Status check failed"));
         }
 
-        const status = String(data.status || "").toLowerCase();
+        const status = prettyStatus(data.status);
         const errMsg = data.error || data.details || "";
 
         upsertHistoryItem(historyId, {
@@ -211,7 +263,7 @@ export default function App() {
         });
 
         if (status === "done") {
-          setModalSub("Finalizing… preparing download link");
+          setModalSub("Finalizing • preparing download link");
           setProgressPct(95);
           return data;
         }
@@ -222,8 +274,8 @@ export default function App() {
 
         setModalSub(
           status === "running"
-            ? "Generating content and charts…"
-            : "Queued… waiting for worker"
+            ? "Running • generating content + charts"
+            : "Queued • waiting for worker"
         );
 
         await new Promise((r) => setTimeout(r, POLL_EVERY_MS));
@@ -242,7 +294,6 @@ export default function App() {
   async function getPresignedUrl({ userPhone, instantId, s3Key }) {
     const url = new URL(PRESIGN_API);
 
-    // Prefer s3Key if available (cleanest)
     if (s3Key) {
       url.searchParams.set("s3Key", s3Key);
     } else {
@@ -257,8 +308,6 @@ export default function App() {
 
     if (!res.ok) throw new Error(buildErrorMessage(res, data, "Presign failed"));
 
-    // Accept multiple response shapes (since lambdas often differ)
-    // If your presign lambda returns { ok:true, presignedUrl:"..." } you’re covered.
     const ok = data?.ok;
     if (ok === false) throw new Error(buildErrorMessage(res, data, "Presign failed"));
 
@@ -307,8 +356,8 @@ export default function App() {
 
       setModalOpen(true);
       setModalTitle("Generating report…");
-      setModalSub("Submitting request…");
-      setProgressPct(10);
+      setModalSub("Submitting request");
+      setProgressPct(12);
 
       const { res, data } = await fetchJson(CONFIRM_API, {
         method: "POST",
@@ -354,7 +403,6 @@ export default function App() {
         historyId,
       });
 
-      // If polling returned nothing (unmounted), just stop
       if (!statusData || !mountedRef.current) return;
 
       const finalS3Key =
@@ -379,13 +427,13 @@ export default function App() {
         subtitle: statusData.subtitle || undefined,
       });
 
-      setModalSub("Ready!");
+      setModalSub("Ready");
       setProgressPct(100);
 
       setTimeout(() => {
         if (!mountedRef.current) return;
         setModalOpen(false);
-      }, 600);
+      }, 550);
     } catch (e) {
       if (!mountedRef.current) return;
       setModalOpen(false);
@@ -435,8 +483,23 @@ export default function App() {
     }
   }
 
+  async function copyToClipboard(text) {
+    try {
+      await navigator.clipboard.writeText(String(text || ""));
+      setToast("Copied ✅");
+    } catch {
+      setToast("Copy failed");
+    }
+  }
+
+  const leftStatus = prettyStatus(leftItem?.status);
+  const rightStatus = prettyStatus(rightItem?.status);
+
   return (
     <div className="page">
+      {/* Toast */}
+      {toast ? <div className="toast">{toast}</div> : null}
+
       {/* Loading Modal */}
       {modalOpen ? (
         <div className="modalOverlay">
@@ -457,38 +520,72 @@ export default function App() {
             </div>
 
             <div className="modalHint">
-              This can take up to ~2 minutes because charts + PDF are generated
-              in the worker.
+              Worker generates charts + PDF. Typical: 30–90s. Worst: ~2 minutes.
             </div>
           </div>
         </div>
       ) : null}
 
+      {/* Hero / Topbar */}
       <header className="topbar">
         <div className="topbarLeft">
-          <div className="brand">RBR Instant Lite Lab</div>
+          <div className="brandRow">
+            <div className="brand">RBR Instant Lab</div>
+            <span className="pill">Internal</span>
+          </div>
           <div className="sub">
-            Internal testing page — generate reports and compare quality side by
-            side.
+            Generate multiple reports and compare quality side-by-side.
+          </div>
+
+          <div className="quickChips">
+            {QUICK_TOPICS.map((t) => (
+              <button
+                key={t}
+                className="chipPill"
+                onClick={() => setTopic(t)}
+                title="Use this topic"
+                type="button"
+              >
+                {t}
+              </button>
+            ))}
           </div>
         </div>
 
         <div className="topbarRight">
           <button
             className="btnSecondary"
+            onClick={() => setShowDebug((v) => !v)}
+            type="button"
+          >
+            {showDebug ? "Hide Debug" : "Show Debug"}
+          </button>
+
+          <button
+            className="btnSecondary"
             onClick={() => setLeftHidden((v) => !v)}
+            type="button"
           >
             {leftHidden ? "Show Inputs" : "Hide Inputs"}
           </button>
         </div>
       </header>
 
-      <div className={`layout ${leftHidden ? "layoutFull" : ""}`}>
+      <div className={clsx("layout", leftHidden && "layoutFull")}>
         {/* LEFT PANEL */}
         {!leftHidden && (
           <aside className="left">
-            <div className="card">
-              <div className="cardTitle">Generate</div>
+            <div className="card glass">
+              <div className="cardTitleRow">
+                <div className="cardTitle">Generate</div>
+                <button
+                  className="linkBtn"
+                  onClick={() => setQuestions(DEFAULT_QUESTIONS)}
+                  type="button"
+                >
+                  Reset questions
+                </button>
+              </div>
 
               <label className="label">Topic</label>
               <input
@@ -498,17 +595,19 @@ export default function App() {
                 placeholder="e.g., FMCG market report India"
               />
 
-              {questions.map((q, i) => (
-                <div key={i} style={{ marginTop: 10 }}>
-                  <label className="label">Question {i + 1}</label>
-                  <textarea
-                    className="textarea"
-                    value={q}
-                    onChange={(e) => updateQuestion(i, e.target.value)}
-                    rows={2}
-                  />
-                </div>
-              ))}
+              <div className="qGrid">
+                {questions.map((q, i) => (
+                  <div key={i} className="qBlock">
+                    <label className="label">Question {i + 1}</label>
+                    <textarea
+                      className="textarea"
+                      value={q}
+                      onChange={(e) => updateQuestion(i, e.target.value)}
+                      rows={2}
+                    />
+                  </div>
+                ))}
+              </div>
 
               <div className="actions">
                 <button className="btn" onClick={generate} disabled={loading}>
@@ -520,30 +619,34 @@ export default function App() {
                   onClick={retry}
                   disabled={loading}
                   title="Retry the same request"
+                  type="button"
                 >
                   Retry
                 </button>
 
                 <button
-                  className="btnSecondary"
+                  className="btnDanger"
                   onClick={clearHistory}
                   disabled={!history.length || loading}
+                  type="button"
                 >
                   Clear history
                 </button>
               </div>
 
-              <div className="apiLine">
-                <span className="apiLabel">Confirm API</span>{" "}
-                <span className="apiValue">{CONFIRM_API || "(missing)"}</span>
-              </div>
-              <div className="apiLine">
-                <span className="apiLabel">Status API</span>{" "}
-                <span className="apiValue">{STATUS_API || "(missing)"}</span>
-              </div>
-              <div className="apiLine">
-                <span className="apiLabel">Presign API</span>{" "}
-                <span className="apiValue">{PRESIGN_API || "(missing)"}</span>
+              <div className="envBox">
+                <div className="envRow">
+                  <span className="envKey">Confirm</span>
+                  <span className="envVal">{CONFIRM_API || "(missing)"}</span>
+                </div>
+                <div className="envRow">
+                  <span className="envKey">Status</span>
+                  <span className="envVal">{STATUS_API || "(missing)"}</span>
+                </div>
+                <div className="envRow">
+                  <span className="envKey">Presign</span>
+                  <span className="envVal">{PRESIGN_API || "(missing)"}</span>
+                </div>
               </div>
 
               {error ? <div className="errorBox">Error: {error}</div> : null}
@@ -555,33 +658,63 @@ export default function App() {
                 <div className="mutedSmall">{history.length} items</div>
               </div>
 
-              {!history.length ? (
-                <div className="empty">
-                  No reports yet. Generate one to start comparing.
+              <div className="historyTools">
+                <input
+                  className="input inputSm"
+                  value={historyQuery}
+                  onChange={(e) => setHistoryQuery(e.target.value)}
+                  placeholder="Search title / topic / instantId…"
+                />
+                <select
+                  className="select"
+                  value={statusFilter}
+                  onChange={(e) => setStatusFilter(e.target.value)}
+                >
+                  <option value="all">All status</option>
+                  <option value="queued">queued</option>
+                  <option value="running">running</option>
+                  <option value="done">done</option>
+                  <option value="failed">failed</option>
+                  <option value="unknown">unknown</option>
+                </select>
+              </div>
+
+              {!filteredHistory.length ? (
+                <div className="empty fancyEmpty">
+                  <div className="emptyIcon">📄</div>
+                  <div className="emptyTitle">No matching reports</div>
+                  <div className="mutedSmall">
+                    Generate a report, or clear the search/filter.
+                  </div>
                 </div>
               ) : (
                 <div className="tableWrap">
                   <table className="table">
                     <thead>
                       <tr>
-                        <th style={{ width: 140 }}>Time</th>
+                        <th style={{ width: 155 }}>Time</th>
                         <th>Title / Topic</th>
-                        <th style={{ width: 120 }}>Instant ID</th>
-                        <th style={{ width: 100 }}>Status</th>
-                        <th style={{ width: 280 }}>Actions</th>
+                        <th style={{ width: 130 }}>Instant ID</th>
+                        <th style={{ width: 110 }}>Status</th>
+                        <th style={{ width: 320 }}>Actions</th>
                       </tr>
                     </thead>
                     <tbody>
-                      {history.map((h) => {
+                      {filteredHistory.map((h) => {
                         const dt = h.createdAt ? new Date(h.createdAt) : null;
                         const timeStr = dt ? dt.toLocaleString() : "-";
                         const isLeft = h.id === leftId;
                         const isRight = h.id === rightId;
 
+                        const st = prettyStatus(h.status);
+
                         return (
                           <tr
                             key={h.id}
-                            className={isLeft || isRight ? "rowSelected" : ""}
+                            className={clsx(
+                              "row",
+                              (isLeft || isRight) && "rowSelected"
+                            )}
                           >
                             <td className="mono">{timeStr}</td>
                             <td>
@@ -590,27 +723,45 @@ export default function App() {
                               </div>
                               <div className="mutedSmall">{h.topic}</div>
                             </td>
-                            <td className="mono">{h.instantId || "-"}</td>
+                            <td className="mono">
+                              <div className="monoRow">
+                                <span>{h.instantId || "-"}</span>
+                                {h.instantId ? (
+                                  <button
+                                    className="miniBtn"
+                                    onClick={() => copyToClipboard(h.instantId)}
+                                    type="button"
+                                    title="Copy Instant ID"
+                                  >
+                                    Copy
+                                  </button>
+                                ) : null}
+                              </div>
+                            </td>
                             <td>
-                              <span
-                                className={`badge ${String(
-                                  h.status || ""
-                                ).toLowerCase()}`}
-                              >
+                              <span className={clsx("badge", `st-${st}`)}>
                                 {h.status || "-"}
                               </span>
                             </td>
                             <td>
                               <div className="rowActions">
                                 <button
-                                  className="chip"
+                                  className={clsx(
+                                    "chip",
+                                    isLeft && "chipActive"
+                                  )}
                                   onClick={() => setLeft(h.id)}
+                                  type="button"
                                 >
                                   {isLeft ? "Viewing Left" : "View Left"}
                                 </button>
                                 <button
-                                  className="chip"
+                                  className={clsx(
+                                    "chip",
+                                    isRight && "chipActive"
+                                  )}
                                   onClick={() => setRight(h.id)}
+                                  type="button"
                                 >
                                   {isRight ? "Viewing Right" : "View Right"}
                                 </button>
@@ -631,6 +782,7 @@ export default function App() {
                                 <button
                                   className="chipDanger"
                                   onClick={() => removeItem(h.id)}
+                                  type="button"
                                 >
                                   Remove
                                 </button>
@@ -645,9 +797,18 @@ export default function App() {
               )}
             </div>
 
-            {lastApiResponse ? (
+            {showDebug && lastApiResponse ? (
               <div className="card" style={{ marginTop: 12 }}>
-                <div className="cardTitle">API Response (debug)</div>
+                <div className="cardTitleRow">
+                  <div className="cardTitle">API Response (debug)</div>
+                  <button
+                    className="linkBtn"
+                    onClick={() => copyToClipboard(JSON.stringify(lastApiResponse, null, 2))}
+                    type="button"
+                  >
+                    Copy JSON
+                  </button>
+                </div>
                 <pre className="debugPre">
                   {JSON.stringify(lastApiResponse, null, 2)}
                 </pre>
@@ -658,8 +819,18 @@ export default function App() {
 
         {/* RIGHT PANEL */}
         <main className="right">
-          <div className="compareHeader">
-            <div className="compareTitle">Compare PDFs</div>
+          <div className="compareHeader sticky">
+            <div className="compareTitleRow">
+              <div className="compareTitle">Compare PDFs</div>
+              <div className="compareBadges">
+                <span className={clsx("miniStatus", `st-${leftStatus}`)}>
+                  Left: {leftItem?.status || "none"}
+                </span>
+                <span className={clsx("miniStatus", `st-${rightStatus}`)}>
+                  Right: {rightItem?.status || "none"}
+                </span>
+              </div>
+            </div>
             <div className="compareHint">
               Pick any two reports from the table (View Left / View Right).
             </div>
@@ -698,14 +869,18 @@ export default function App() {
 
               {leftItem?.pdfUrl ? (
                 <iframe
-                  key={leftItem.pdfUrl} // forces reload only when URL changes
+                  key={leftItem.pdfUrl}
                   className="pdfFrame"
                   src={leftItem.pdfUrl}
                   title="Left PDF"
                 />
               ) : (
-                <div className="pdfEmpty">
-                  Select a report and click “View Left”.
+                <div className="pdfEmpty fancyEmpty">
+                  <div className="emptyIcon">⬅️</div>
+                  <div className="emptyTitle">Select a Left report</div>
+                  <div className="mutedSmall">
+                    Use “View Left” from the table.
+                  </div>
                 </div>
               )}
             </div>
@@ -748,8 +923,12 @@ export default function App() {
                   title="Right PDF"
                 />
               ) : (
-                <div className="pdfEmpty">
-                  Select a report and click “View Right”.
+                <div className="pdfEmpty fancyEmpty">
+                  <div className="emptyIcon">➡️</div>
+                  <div className="emptyTitle">Select a Right report</div>
+                  <div className="mutedSmall">
+                    Use “View Right” from the table.
+                  </div>
                 </div>
               )}
             </div>
@@ -758,7 +937,7 @@ export default function App() {
       </div>
 
       <footer className="footer">
-        Tip: Generate multiple reports with small prompt tweaks and compare.
+        Tip: generate 2–3 reports with small prompt tweaks and compare results.
       </footer>
     </div>
   );
