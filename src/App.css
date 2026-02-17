@@ -22,6 +22,11 @@
   --r: 18px;
   --r2: 14px;
 
+  --mono:
+
+  /* dynamic header height (set by JS) */
+  --header-h: 0px;
+
   --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
 }
 
@@ -113,6 +118,10 @@ body{
   flex-direction: column;
 
   overflow: visible;
+
+  /* Reserve space for sticky header (dynamic height) */
+  padding-top: var(--header-h);
+
 }
 
 /* ✅ Sticky header that does NOT overlap content:
@@ -123,6 +132,9 @@ body{
   top: 0;
   z-index: 50;
 
+  height: var(--header-h);
+  margin-top: calc(-1 * var(--header-h));
+
   padding: 14px 16px;
   border-bottom: 1px solid rgba(255,255,255,.12);
 
@@ -131,7 +143,7 @@ body{
   gap: 16px;
 
   /* more opaque so you visually see separation */
-  background: linear-gradient(180deg, rgba(8,10,24,.96), rgba(8,10,24,.82));
+  background: linear-gradient(180deg, rgba(8,10,24,.88), rgba(8,10,24,.68));
   backdrop-filter: blur(18px);
   box-shadow: 0 10px 30px rgba(0,0,0,.35);
   isolation: isolate; /* keeps blend layers sane */
