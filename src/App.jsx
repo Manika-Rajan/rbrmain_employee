@@ -120,11 +120,41 @@ export default function App() {
   const mountedRef = useRef(true);
   const pollAbortRef = useRef({ aborted: false });
 
+  const headerRef = useRef(null);
+
   useEffect(() => {
     mountedRef.current = true;
     return () => {
       mountedRef.current = false;
       pollAbortRef.current.aborted = true;
+    };
+  }, []);
+
+  // Keep a CSS variable in sync with the real header height
+  // so the sticky header never covers content when scrolling.
+  useEffect(() => {
+    const el = headerRef.current;
+    if (!el) return;
+
+    const apply = () => {
+      const h = Math.ceil(el.getBoundingClientRect().height);
+      document.documentElement.style.setProperty("--header-h", `${h}px`);
+    };
+
+    apply();
+
+    let ro;
+    try {
+      ro = new ResizeObserver(() => apply());
+      ro.observe(el);
+    } catch {
+      // Older browsers: ignore ResizeObserver
+    }
+
+    window.addEventListener("resize", apply);
+    return () => {
+      window.removeEventListener("resize", apply);
+      if (ro) ro.disconnect();
     };
   }, []);
 
@@ -482,7 +512,7 @@ export default function App() {
 
       {/* SHELL fixes cropping: header + body with internal scroll */}
       <div className="shell">
-        <header className="topbar">
+        <header className="topbar" ref={headerRef}>
           <div className="topbarLeft">
             <div className="brandRow">
               <div className="brand">RBR Instant Lab</div>
