@@ -38,9 +38,7 @@ function loadHistory() {
 function saveHistory(items) {
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(items));
-  } catch {
-    // ignore
-  }
+  } catch {}
 }
 
 function nowIso() {
@@ -66,11 +64,10 @@ function buildErrorMessage(res, data, fallback) {
     data?.details ||
     (typeof data?.raw === "string" && data.raw.slice(0, 300)) ||
     fallback;
-
   return base || fallback || `HTTP ${res?.status || "error"}`;
 }
 
-// IMPORTANT: Use fragment buster only (never add query params to presigned URL)
+// IMPORTANT: use fragment buster only (do not add query params to presigned URL)
 function withFragmentBuster(url) {
   if (!url) return url;
   const base = url.split("#")[0];
@@ -87,12 +84,11 @@ function normalize(s) {
 
 function prettyStatus(s) {
   const x = normalize(s);
-  if (!x) return "unknown";
-  return x;
+  return x || "unknown";
 }
 
 export default function App() {
-  // ENV (set these in Amplify env vars)
+  // ENV (Amplify env vars)
   const CONFIRM_API = import.meta.env.VITE_CONFIRM_API;
   const STATUS_API = import.meta.env.VITE_STATUS_API;
   const PRESIGN_API = import.meta.env.VITE_PRESIGN_API;
@@ -109,11 +105,11 @@ export default function App() {
   const [rightId, setRightId] = useState(null);
   const [leftHidden, setLeftHidden] = useState(false);
 
-  // Fancy additions (no dependencies)
+  // Fancy UX extras
   const [historyQuery, setHistoryQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
-  const [showDebug, setShowDebug] = useState(false);
   const [toast, setToast] = useState("");
+  const [showDebug, setShowDebug] = useState(false);
 
   // Modal state
   const [modalOpen, setModalOpen] = useState(false);
@@ -121,10 +117,7 @@ export default function App() {
   const [modalSub, setModalSub] = useState("Initializing…");
   const [progressPct, setProgressPct] = useState(5);
 
-  // Avoid setState after unmount
   const mountedRef = useRef(true);
-
-  // Poll cancel flag
   const pollAbortRef = useRef({ aborted: false });
 
   useEffect(() => {
@@ -135,9 +128,7 @@ export default function App() {
     };
   }, []);
 
-  useEffect(() => {
-    saveHistory(history);
-  }, [history]);
+  useEffect(() => saveHistory(history), [history]);
 
   useEffect(() => {
     if (!history.length) return;
@@ -146,14 +137,13 @@ export default function App() {
     );
     const first = sorted[0]?.id ?? null;
     const second = sorted[1]?.id ?? null;
-
     setLeftId((prev) => prev ?? first);
     setRightId((prev) => prev ?? second ?? first);
   }, [history]);
 
   useEffect(() => {
     if (!toast) return;
-    const t = setTimeout(() => setToast(""), 1800);
+    const t = setTimeout(() => setToast(""), 1700);
     return () => clearTimeout(t);
   }, [toast]);
 
@@ -213,20 +203,14 @@ export default function App() {
     const startedAt = Date.now();
     pollAbortRef.current.aborted = false;
 
-    if (!mountedRef.current) return null;
-
     setModalOpen(true);
     setModalTitle("Generating report…");
     setModalSub("Queued • starting worker");
     setProgressPct(8);
 
-    // Smooth progress animation up to 92%
     const timer = setInterval(() => {
       if (!mountedRef.current) return;
-      setProgressPct((p) => {
-        if (p >= 92) return p;
-        return Math.min(92, p + 1);
-      });
+      setProgressPct((p) => (p >= 92 ? p : Math.min(92, p + 1)));
     }, 850);
 
     try {
@@ -293,10 +277,8 @@ export default function App() {
 
   async function getPresignedUrl({ userPhone, instantId, s3Key }) {
     const url = new URL(PRESIGN_API);
-
-    if (s3Key) {
-      url.searchParams.set("s3Key", s3Key);
-    } else {
+    if (s3Key) url.searchParams.set("s3Key", s3Key);
+    else {
       url.searchParams.set("userPhone", userPhone);
       url.searchParams.set("instantId", instantId);
     }
@@ -325,28 +307,20 @@ export default function App() {
   async function generate() {
     setError("");
     setLastApiResponse(null);
-    pollAbortRef.current.aborted = true; // stop any previous polling loops
+    pollAbortRef.current.aborted = true;
 
     if (!ensureEnv()) return;
 
     const t = topic.trim();
     const qs = questions.map((q) => (q || "").trim());
 
-    if (!t) {
-      setError("Please enter a topic.");
-      return;
-    }
-    if (qs.some((q) => !q)) {
-      setError("Please fill all 5 questions.");
-      return;
-    }
+    if (!t) return setError("Please enter a topic.");
+    if (qs.some((q) => !q)) return setError("Please fill all 5 questions.");
 
     setLoading(true);
-    setModalOpen(false);
     setProgressPct(5);
 
     try {
-      // 1) Confirm (queue the job)
       const payload = {
         bypass: true,
         employeeId: "10000001",
@@ -378,7 +352,6 @@ export default function App() {
       }
 
       const historyId = `${instantId}-${Date.now()}`;
-
       const newItem = {
         id: historyId,
         createdAt: data.createdAt || nowIso(),
@@ -393,10 +366,8 @@ export default function App() {
       };
 
       setHistory((prev) => [newItem, ...prev].slice(0, 200));
-      setRightId((prevRight) => leftId || prevRight);
       setLeftId(historyId);
 
-      // 2) Poll status until done
       const statusData = await pollStatusUntilDone({
         userPhone,
         instantId,
@@ -410,7 +381,6 @@ export default function App() {
         statusData?.s3_key ||
         `instant/${userPhone}/${instantId}.pdf`;
 
-      // 3) Presign
       const presignedUrl = await getPresignedUrl({
         userPhone,
         instantId,
@@ -429,11 +399,7 @@ export default function App() {
 
       setModalSub("Ready");
       setProgressPct(100);
-
-      setTimeout(() => {
-        if (!mountedRef.current) return;
-        setModalOpen(false);
-      }, 550);
+      setTimeout(() => mountedRef.current && setModalOpen(false), 550);
     } catch (e) {
       if (!mountedRef.current) return;
       setModalOpen(false);
@@ -442,11 +408,6 @@ export default function App() {
       if (!mountedRef.current) return;
       setLoading(false);
     }
-  }
-
-  function retry() {
-    if (loading) return;
-    generate();
   }
 
   function setLeft(itemId) {
@@ -471,18 +432,6 @@ export default function App() {
     if (rightId === itemId) setRightId(null);
   }
 
-  function clearHistory() {
-    if (!confirm("Clear all generated reports from this page history?")) return;
-    setHistory([]);
-    setLeftId(null);
-    setRightId(null);
-    try {
-      localStorage.removeItem(STORAGE_KEY);
-    } catch {
-      // ignore
-    }
-  }
-
   async function copyToClipboard(text) {
     try {
       await navigator.clipboard.writeText(String(text || ""));
@@ -497,10 +446,14 @@ export default function App() {
 
   return (
     <div className="page">
+      {/* Ambient background */}
+      <div className="aurora" aria-hidden="true" />
+      <div className="noise" aria-hidden="true" />
+
       {/* Toast */}
       {toast ? <div className="toast">{toast}</div> : null}
 
-      {/* Loading Modal */}
+      {/* Modal */}
       {modalOpen ? (
         <div className="modalOverlay">
           <div className="modalCard">
@@ -520,425 +473,331 @@ export default function App() {
             </div>
 
             <div className="modalHint">
-              Worker generates charts + PDF. Typical: 30–90s. Worst: ~2 minutes.
+              Charts + PDF are generated in the worker. Typical: 30–90s. Worst:
+              ~2 minutes.
             </div>
           </div>
         </div>
       ) : null}
 
-      {/* Hero / Topbar */}
-      <header className="topbar">
-        <div className="topbarLeft">
-          <div className="brandRow">
-            <div className="brand">RBR Instant Lab</div>
-            <span className="pill">Internal</span>
-          </div>
-          <div className="sub">
-            Generate multiple reports and compare quality side-by-side.
-          </div>
+      {/* SHELL fixes cropping: header + body with internal scroll */}
+      <div className="shell">
+        <header className="topbar">
+          <div className="topbarLeft">
+            <div className="brandRow">
+              <div className="brand">RBR Instant Lab</div>
+              <span className="pill">Internal</span>
+            </div>
+            <div className="sub">
+              Generate multiple reports and compare quality side-by-side.
+            </div>
 
-          <div className="quickChips">
-            {QUICK_TOPICS.map((t) => (
-              <button
-                key={t}
-                className="chipPill"
-                onClick={() => setTopic(t)}
-                title="Use this topic"
-                type="button"
-              >
-                {t}
-              </button>
-            ))}
-          </div>
-        </div>
-
-        <div className="topbarRight">
-          <button
-            className="btnSecondary"
-            onClick={() => setShowDebug((v) => !v)}
-            type="button"
-          >
-            {showDebug ? "Hide Debug" : "Show Debug"}
-          </button>
-
-          <button
-            className="btnSecondary"
-            onClick={() => setLeftHidden((v) => !v)}
-            type="button"
-          >
-            {leftHidden ? "Show Inputs" : "Hide Inputs"}
-          </button>
-        </div>
-      </header>
-
-      <div className={clsx("layout", leftHidden && "layoutFull")}>
-        {/* LEFT PANEL */}
-        {!leftHidden && (
-          <aside className="left">
-            <div className="card glass">
-              <div className="cardTitleRow">
-                <div className="cardTitle">Generate</div>
+            <div className="quickChips">
+              {QUICK_TOPICS.map((t) => (
                 <button
-                  className="linkBtn"
-                  onClick={() => setQuestions(DEFAULT_QUESTIONS)}
+                  key={t}
+                  className="chipPill"
+                  onClick={() => setTopic(t)}
                   type="button"
+                  title="Use this topic"
                 >
-                  Reset questions
+                  {t}
                 </button>
-              </div>
+              ))}
+            </div>
+          </div>
 
-              <label className="label">Topic</label>
-              <input
-                className="input"
-                value={topic}
-                onChange={(e) => setTopic(e.target.value)}
-                placeholder="e.g., FMCG market report India"
-              />
+          <div className="topbarRight">
+            <button
+              className="btnSecondary"
+              onClick={() => setShowDebug((v) => !v)}
+              type="button"
+            >
+              {showDebug ? "Hide Debug" : "Show Debug"}
+            </button>
+            <button
+              className="btnSecondary"
+              onClick={() => setLeftHidden((v) => !v)}
+              type="button"
+            >
+              {leftHidden ? "Show Inputs" : "Hide Inputs"}
+            </button>
+          </div>
+        </header>
 
-              <div className="qGrid">
-                {questions.map((q, i) => (
-                  <div key={i} className="qBlock">
-                    <label className="label">Question {i + 1}</label>
-                    <textarea
-                      className="textarea"
-                      value={q}
-                      onChange={(e) => updateQuestion(i, e.target.value)}
-                      rows={2}
+        <div className={clsx("body", leftHidden && "bodyFull")}>
+          {/* LEFT */}
+          {!leftHidden && (
+            <aside className="left">
+              <div className="panelScroll">
+                <div className="card glass">
+                  <div className="cardTitleRow">
+                    <div className="cardTitle">Generate</div>
+                    <button
+                      className="linkBtn"
+                      onClick={() => setQuestions(DEFAULT_QUESTIONS)}
+                      type="button"
+                    >
+                      Reset questions
+                    </button>
+                  </div>
+
+                  <label className="label">Topic</label>
+                  <input
+                    className="input"
+                    value={topic}
+                    onChange={(e) => setTopic(e.target.value)}
+                    placeholder="e.g., FMCG market report India"
+                  />
+
+                  <div className="qGrid">
+                    {questions.map((q, i) => (
+                      <div key={i} className="qBlock">
+                        <label className="label">Question {i + 1}</label>
+                        <textarea
+                          className="textarea"
+                          value={q}
+                          onChange={(e) => updateQuestion(i, e.target.value)}
+                          rows={2}
+                        />
+                      </div>
+                    ))}
+                  </div>
+
+                  <div className="actions">
+                    <button className="btn" onClick={generate} disabled={loading}>
+                      {loading ? "Generating..." : "Generate PDF"}
+                    </button>
+                  </div>
+
+                  {error ? <div className="errorBox">Error: {error}</div> : null}
+                </div>
+
+                <div className="card" style={{ marginTop: 12 }}>
+                  <div className="cardTitleRow">
+                    <div className="cardTitle">Generated Reports</div>
+                    <div className="mutedSmall">{history.length} items</div>
+                  </div>
+
+                  <div className="historyTools">
+                    <input
+                      className="input inputSm"
+                      value={historyQuery}
+                      onChange={(e) => setHistoryQuery(e.target.value)}
+                      placeholder="Search title / topic / instantId…"
                     />
+                    <select
+                      className="select"
+                      value={statusFilter}
+                      onChange={(e) => setStatusFilter(e.target.value)}
+                    >
+                      <option value="all">All</option>
+                      <option value="queued">queued</option>
+                      <option value="running">running</option>
+                      <option value="done">done</option>
+                      <option value="failed">failed</option>
+                      <option value="unknown">unknown</option>
+                    </select>
                   </div>
-                ))}
-              </div>
 
-              <div className="actions">
-                <button className="btn" onClick={generate} disabled={loading}>
-                  {loading ? "Generating..." : "Generate PDF"}
-                </button>
-
-                <button
-                  className="btnSecondary"
-                  onClick={retry}
-                  disabled={loading}
-                  title="Retry the same request"
-                  type="button"
-                >
-                  Retry
-                </button>
-
-                <button
-                  className="btnDanger"
-                  onClick={clearHistory}
-                  disabled={!history.length || loading}
-                  type="button"
-                >
-                  Clear history
-                </button>
-              </div>
-
-              <div className="envBox">
-                <div className="envRow">
-                  <span className="envKey">Confirm</span>
-                  <span className="envVal">{CONFIRM_API || "(missing)"}</span>
-                </div>
-                <div className="envRow">
-                  <span className="envKey">Status</span>
-                  <span className="envVal">{STATUS_API || "(missing)"}</span>
-                </div>
-                <div className="envRow">
-                  <span className="envKey">Presign</span>
-                  <span className="envVal">{PRESIGN_API || "(missing)"}</span>
-                </div>
-              </div>
-
-              {error ? <div className="errorBox">Error: {error}</div> : null}
-            </div>
-
-            <div className="card" style={{ marginTop: 12 }}>
-              <div className="cardTitleRow">
-                <div className="cardTitle">Generated Reports</div>
-                <div className="mutedSmall">{history.length} items</div>
-              </div>
-
-              <div className="historyTools">
-                <input
-                  className="input inputSm"
-                  value={historyQuery}
-                  onChange={(e) => setHistoryQuery(e.target.value)}
-                  placeholder="Search title / topic / instantId…"
-                />
-                <select
-                  className="select"
-                  value={statusFilter}
-                  onChange={(e) => setStatusFilter(e.target.value)}
-                >
-                  <option value="all">All status</option>
-                  <option value="queued">queued</option>
-                  <option value="running">running</option>
-                  <option value="done">done</option>
-                  <option value="failed">failed</option>
-                  <option value="unknown">unknown</option>
-                </select>
-              </div>
-
-              {!filteredHistory.length ? (
-                <div className="empty fancyEmpty">
-                  <div className="emptyIcon">📄</div>
-                  <div className="emptyTitle">No matching reports</div>
-                  <div className="mutedSmall">
-                    Generate a report, or clear the search/filter.
-                  </div>
-                </div>
-              ) : (
-                <div className="tableWrap">
-                  <table className="table">
-                    <thead>
-                      <tr>
-                        <th style={{ width: 155 }}>Time</th>
-                        <th>Title / Topic</th>
-                        <th style={{ width: 130 }}>Instant ID</th>
-                        <th style={{ width: 110 }}>Status</th>
-                        <th style={{ width: 320 }}>Actions</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {filteredHistory.map((h) => {
-                        const dt = h.createdAt ? new Date(h.createdAt) : null;
-                        const timeStr = dt ? dt.toLocaleString() : "-";
-                        const isLeft = h.id === leftId;
-                        const isRight = h.id === rightId;
-
-                        const st = prettyStatus(h.status);
-
-                        return (
-                          <tr
-                            key={h.id}
-                            className={clsx(
-                              "row",
-                              (isLeft || isRight) && "rowSelected"
-                            )}
-                          >
-                            <td className="mono">{timeStr}</td>
-                            <td>
-                              <div className="titleCell">
-                                {h.title || h.topic}
-                              </div>
-                              <div className="mutedSmall">{h.topic}</div>
-                            </td>
-                            <td className="mono">
-                              <div className="monoRow">
-                                <span>{h.instantId || "-"}</span>
-                                {h.instantId ? (
-                                  <button
-                                    className="miniBtn"
-                                    onClick={() => copyToClipboard(h.instantId)}
-                                    type="button"
-                                    title="Copy Instant ID"
-                                  >
-                                    Copy
-                                  </button>
-                                ) : null}
-                              </div>
-                            </td>
-                            <td>
-                              <span className={clsx("badge", `st-${st}`)}>
-                                {h.status || "-"}
-                              </span>
-                            </td>
-                            <td>
-                              <div className="rowActions">
-                                <button
-                                  className={clsx(
-                                    "chip",
-                                    isLeft && "chipActive"
-                                  )}
-                                  onClick={() => setLeft(h.id)}
-                                  type="button"
-                                >
-                                  {isLeft ? "Viewing Left" : "View Left"}
-                                </button>
-                                <button
-                                  className={clsx(
-                                    "chip",
-                                    isRight && "chipActive"
-                                  )}
-                                  onClick={() => setRight(h.id)}
-                                  type="button"
-                                >
-                                  {isRight ? "Viewing Right" : "View Right"}
-                                </button>
-
-                                {h.pdfUrl ? (
-                                  <a
-                                    className="chipLink"
-                                    href={h.pdfUrl}
-                                    target="_blank"
-                                    rel="noreferrer"
-                                  >
-                                    Open
-                                  </a>
-                                ) : (
-                                  <span className="chipDisabled">No link</span>
-                                )}
-
-                                <button
-                                  className="chipDanger"
-                                  onClick={() => removeItem(h.id)}
-                                  type="button"
-                                >
-                                  Remove
-                                </button>
-                              </div>
-                            </td>
+                  {!filteredHistory.length ? (
+                    <div className="empty fancyEmpty">
+                      <div className="emptyIcon">📄</div>
+                      <div className="emptyTitle">No matching reports</div>
+                      <div className="mutedSmall">
+                        Generate a report, or clear the search/filter.
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="tableWrap">
+                      <table className="table">
+                        <thead>
+                          <tr>
+                            <th style={{ width: 150 }}>Time</th>
+                            <th>Topic</th>
+                            <th style={{ width: 120 }}>Instant</th>
+                            <th style={{ width: 105 }}>Status</th>
+                            <th style={{ width: 320 }}>Actions</th>
                           </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
-                </div>
-              )}
-            </div>
-
-            {showDebug && lastApiResponse ? (
-              <div className="card" style={{ marginTop: 12 }}>
-                <div className="cardTitleRow">
-                  <div className="cardTitle">API Response (debug)</div>
-                  <button
-                    className="linkBtn"
-                    onClick={() => copyToClipboard(JSON.stringify(lastApiResponse, null, 2))}
-                    type="button"
-                  >
-                    Copy JSON
-                  </button>
-                </div>
-                <pre className="debugPre">
-                  {JSON.stringify(lastApiResponse, null, 2)}
-                </pre>
-              </div>
-            ) : null}
-          </aside>
-        )}
-
-        {/* RIGHT PANEL */}
-        <main className="right">
-          <div className="compareHeader sticky">
-            <div className="compareTitleRow">
-              <div className="compareTitle">Compare PDFs</div>
-              <div className="compareBadges">
-                <span className={clsx("miniStatus", `st-${leftStatus}`)}>
-                  Left: {leftItem?.status || "none"}
-                </span>
-                <span className={clsx("miniStatus", `st-${rightStatus}`)}>
-                  Right: {rightItem?.status || "none"}
-                </span>
-              </div>
-            </div>
-            <div className="compareHint">
-              Pick any two reports from the table (View Left / View Right).
-            </div>
-          </div>
-
-          <div className="pdfGrid">
-            <div className="pdfPane">
-              <div className="pdfPaneHeader">
-                <div className="paneTitle">Left</div>
-                <div className="paneMeta">
-                  {leftItem ? (
-                    <>
-                      <span className="mono">
-                        {leftItem.instantId || leftItem.id}
-                      </span>
-                      <span className="dot">•</span>
-                      <span className="mutedSmall">
-                        {leftItem.title || leftItem.topic}
-                      </span>
-                    </>
-                  ) : (
-                    <span className="mutedSmall">No selection</span>
+                        </thead>
+                        <tbody>
+                          {filteredHistory.map((h) => {
+                            const dt = h.createdAt ? new Date(h.createdAt) : null;
+                            const timeStr = dt ? dt.toLocaleString() : "-";
+                            const st = prettyStatus(h.status);
+                            return (
+                              <tr key={h.id} className="row">
+                                <td className="mono">{timeStr}</td>
+                                <td>
+                                  <div className="titleCell">{h.title || h.topic}</div>
+                                  <div className="mutedSmall">{h.topic}</div>
+                                </td>
+                                <td className="mono">
+                                  <div className="monoRow">
+                                    <span>{h.instantId || "-"}</span>
+                                    {h.instantId ? (
+                                      <button
+                                        className="miniBtn"
+                                        onClick={() => copyToClipboard(h.instantId)}
+                                        type="button"
+                                      >
+                                        Copy
+                                      </button>
+                                    ) : null}
+                                  </div>
+                                </td>
+                                <td>
+                                  <span className={clsx("badge", `st-${st}`)}>
+                                    {h.status || "-"}
+                                  </span>
+                                </td>
+                                <td>
+                                  <div className="rowActions">
+                                    <button className="chip" onClick={() => setLeft(h.id)} type="button">
+                                      View Left
+                                    </button>
+                                    <button className="chip" onClick={() => setRight(h.id)} type="button">
+                                      View Right
+                                    </button>
+                                    {h.pdfUrl ? (
+                                      <a className="chipLink" href={h.pdfUrl} target="_blank" rel="noreferrer">
+                                        Open
+                                      </a>
+                                    ) : (
+                                      <span className="chipDisabled">No link</span>
+                                    )}
+                                    <button className="chipDanger" onClick={() => removeItem(h.id)} type="button">
+                                      Remove
+                                    </button>
+                                  </div>
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
                   )}
                 </div>
-                {leftItem?.pdfUrl ? (
-                  <a
-                    className="openBtn"
-                    href={leftItem.pdfUrl}
-                    target="_blank"
-                    rel="noreferrer"
-                  >
-                    Open
-                  </a>
+
+                {showDebug && lastApiResponse ? (
+                  <div className="card" style={{ marginTop: 12 }}>
+                    <div className="cardTitleRow">
+                      <div className="cardTitle">API Response (debug)</div>
+                      <button
+                        className="linkBtn"
+                        onClick={() =>
+                          copyToClipboard(JSON.stringify(lastApiResponse, null, 2))
+                        }
+                        type="button"
+                      >
+                        Copy JSON
+                      </button>
+                    </div>
+                    <pre className="debugPre">
+                      {JSON.stringify(lastApiResponse, null, 2)}
+                    </pre>
+                  </div>
                 ) : null}
               </div>
+            </aside>
+          )}
 
-              {leftItem?.pdfUrl ? (
-                <iframe
-                  key={leftItem.pdfUrl}
-                  className="pdfFrame"
-                  src={leftItem.pdfUrl}
-                  title="Left PDF"
-                />
-              ) : (
-                <div className="pdfEmpty fancyEmpty">
-                  <div className="emptyIcon">⬅️</div>
-                  <div className="emptyTitle">Select a Left report</div>
-                  <div className="mutedSmall">
-                    Use “View Left” from the table.
-                  </div>
+          {/* RIGHT */}
+          <main className="right">
+            <div className="compareHeader">
+              <div className="compareTitleRow">
+                <div className="compareTitle">Compare PDFs</div>
+                <div className="compareBadges">
+                  <span className={clsx("miniStatus", `st-${leftStatus}`)}>
+                    Left: {leftItem?.status || "none"}
+                  </span>
+                  <span className={clsx("miniStatus", `st-${rightStatus}`)}>
+                    Right: {rightItem?.status || "none"}
+                  </span>
                 </div>
-              )}
+              </div>
+              <div className="compareHint">
+                Choose “View Left / View Right” from the table. No cropping — panes fit the screen.
+              </div>
             </div>
 
-            <div className="pdfPane">
-              <div className="pdfPaneHeader">
-                <div className="paneTitle">Right</div>
-                <div className="paneMeta">
-                  {rightItem ? (
-                    <>
-                      <span className="mono">
-                        {rightItem.instantId || rightItem.id}
-                      </span>
-                      <span className="dot">•</span>
-                      <span className="mutedSmall">
-                        {rightItem.title || rightItem.topic}
-                      </span>
-                    </>
+            <div className="pdfGrid">
+              <section className="pdfPane">
+                <div className="pdfPaneHeader">
+                  <div className="paneTitle">Left</div>
+                  <div className="paneMeta">
+                    {leftItem ? (
+                      <>
+                        <span className="mono">{leftItem.instantId || leftItem.id}</span>
+                        <span className="dot">•</span>
+                        <span className="mutedSmall">{leftItem.title || leftItem.topic}</span>
+                      </>
+                    ) : (
+                      <span className="mutedSmall">No selection</span>
+                    )}
+                  </div>
+                  {leftItem?.pdfUrl ? (
+                    <a className="openBtn" href={leftItem.pdfUrl} target="_blank" rel="noreferrer">
+                      Open
+                    </a>
+                  ) : null}
+                </div>
+
+                <div className="pdfFill">
+                  {leftItem?.pdfUrl ? (
+                    <iframe className="pdfFrame" src={leftItem.pdfUrl} title="Left PDF" />
                   ) : (
-                    <span className="mutedSmall">No selection</span>
+                    <div className="pdfEmpty fancyEmpty">
+                      <div className="emptyIcon">⬅️</div>
+                      <div className="emptyTitle">Select a Left report</div>
+                      <div className="mutedSmall">Use “View Left” in the table.</div>
+                    </div>
                   )}
                 </div>
-                {rightItem?.pdfUrl ? (
-                  <a
-                    className="openBtn"
-                    href={rightItem.pdfUrl}
-                    target="_blank"
-                    rel="noreferrer"
-                  >
-                    Open
-                  </a>
-                ) : null}
-              </div>
+              </section>
 
-              {rightItem?.pdfUrl ? (
-                <iframe
-                  key={rightItem.pdfUrl}
-                  className="pdfFrame"
-                  src={rightItem.pdfUrl}
-                  title="Right PDF"
-                />
-              ) : (
-                <div className="pdfEmpty fancyEmpty">
-                  <div className="emptyIcon">➡️</div>
-                  <div className="emptyTitle">Select a Right report</div>
-                  <div className="mutedSmall">
-                    Use “View Right” from the table.
+              <section className="pdfPane">
+                <div className="pdfPaneHeader">
+                  <div className="paneTitle">Right</div>
+                  <div className="paneMeta">
+                    {rightItem ? (
+                      <>
+                        <span className="mono">{rightItem.instantId || rightItem.id}</span>
+                        <span className="dot">•</span>
+                        <span className="mutedSmall">{rightItem.title || rightItem.topic}</span>
+                      </>
+                    ) : (
+                      <span className="mutedSmall">No selection</span>
+                    )}
                   </div>
+                  {rightItem?.pdfUrl ? (
+                    <a className="openBtn" href={rightItem.pdfUrl} target="_blank" rel="noreferrer">
+                      Open
+                    </a>
+                  ) : null}
                 </div>
-              )}
+
+                <div className="pdfFill">
+                  {rightItem?.pdfUrl ? (
+                    <iframe className="pdfFrame" src={rightItem.pdfUrl} title="Right PDF" />
+                  ) : (
+                    <div className="pdfEmpty fancyEmpty">
+                      <div className="emptyIcon">➡️</div>
+                      <div className="emptyTitle">Select a Right report</div>
+                      <div className="mutedSmall">Use “View Right” in the table.</div>
+                    </div>
+                  )}
+                </div>
+              </section>
             </div>
-          </div>
-        </main>
+          </main>
+        </div>
+
+        <footer className="footer">
+          Tip: Generate 2–3 reports with small prompt changes and compare output quality.
+        </footer>
       </div>
-
-      <footer className="footer">
-        Tip: generate 2–3 reports with small prompt tweaks and compare results.
-      </footer>
     </div>
   );
 }
