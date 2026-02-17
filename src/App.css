@@ -22,11 +22,6 @@
   --r: 18px;
   --r2: 14px;
 
-  --mono:
-
-  /* dynamic header height (set by JS) */
-  --header-h: 0px;
-
   --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
 }
 
@@ -105,8 +100,11 @@ body{
 .shell{
   position: relative;
   z-index: 1; /* above aurora/noise */
+
+  /* ✅ Lock the shell to the viewport so the BODY can scroll under the sticky header
+     without ever going behind it. */
+  height: calc(100vh - 28px);
   min-height: calc(100vh - 28px);
-  height: auto;
 
   border-radius: var(--r);
   border: 1px solid rgba(255,255,255,.10);
@@ -117,11 +115,8 @@ body{
   display: flex;
   flex-direction: column;
 
-  overflow: visible;
-
-  /* Reserve space for sticky header (dynamic height) */
-  padding-top: var(--header-h);
-
+  /* ✅ Critical: prevent the outer page from scrolling *inside* the shell */
+  overflow: hidden;
 }
 
 /* ✅ Sticky header that does NOT overlap content:
@@ -132,9 +127,6 @@ body{
   top: 0;
   z-index: 50;
 
-  height: var(--header-h);
-  margin-top: calc(-1 * var(--header-h));
-
   padding: 14px 16px;
   border-bottom: 1px solid rgba(255,255,255,.12);
 
@@ -143,7 +135,7 @@ body{
   gap: 16px;
 
   /* more opaque so you visually see separation */
-  background: linear-gradient(180deg, rgba(8,10,24,.88), rgba(8,10,24,.68));
+  background: linear-gradient(180deg, rgba(8,10,24,.96), rgba(8,10,24,.82));
   backdrop-filter: blur(18px);
   box-shadow: 0 10px 30px rgba(0,0,0,.35);
   isolation: isolate; /* keeps blend layers sane */
@@ -189,12 +181,16 @@ body{
 
 /* Main body area */
 .body{
-  flex: 0 0 auto;
+  /* ✅ The main scroll container */
+  flex: 1;
+  min-height: 0;
+
   display: grid;
   grid-template-columns: 520px 1fr;
   gap: 12px;
   padding: 12px;
-  overflow: visible;
+
+  overflow: auto;
 }
 .bodyFull{ grid-template-columns: 1fr; }
 
