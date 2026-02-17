@@ -26,10 +26,8 @@
 }
 
 *{ box-sizing:border-box; }
-html, body { height: 100%; }
 
-/* If you ever jump to anchors, avoid hiding behind the sticky bar */
-html { scroll-padding-top: 160px; }
+html, body, #root { height: 100%; }
 
 body{
   margin:0;
@@ -40,16 +38,18 @@ body{
     radial-gradient(700px 450px at 40% 110%, rgba(244,114,182,.16), transparent 60%),
     linear-gradient(180deg, var(--bg0), var(--bg1));
   font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial;
-  overflow-y: auto;
-  overflow-x: hidden;
+
+  /* ✅ CRITICAL: prevent window scroll (only inner scroll in app) */
+  overflow: hidden;
 }
 
-/* Whole page wrapper */
+/* Whole page wrapper fills viewport */
 .page{
   position: relative;
-  min-height: 100vh;
+  height: 100%;
   width: 100%;
   padding: 14px;
+  overflow: hidden;
 }
 
 /* Animated aurora */
@@ -71,7 +71,6 @@ body{
   to  { transform: translate3d(12px, 10px, 0) scale(1.03); }
 }
 
-/* Subtle noise overlay */
 .noise{
   position: absolute;
   inset: 0;
@@ -96,16 +95,11 @@ body{
   backdrop-filter: blur(12px);
 }
 
-/* Shell is a "page card" that can grow with content */
+/* Shell fills page and contains the ONLY scroll region */
 .shell{
   position: relative;
-  z-index: 1; /* above aurora/noise */
-
-  /* ✅ Lock the shell to the viewport so the BODY can scroll under the sticky header
-     without ever going behind it. */
-  height: calc(100vh - 28px);
-  min-height: calc(100vh - 28px);
-
+  z-index: 1;
+  height: 100%;
   border-radius: var(--r);
   border: 1px solid rgba(255,255,255,.10);
   background: linear-gradient(180deg, rgba(255,255,255,.06), rgba(255,255,255,.03));
@@ -114,31 +108,22 @@ body{
 
   display: flex;
   flex-direction: column;
-
-  /* ✅ Critical: prevent the outer page from scrolling *inside* the shell */
-  overflow: hidden;
+  overflow: hidden; /* ✅ locks scroll to .body */
 }
 
-/* ✅ Sticky header that does NOT overlap content:
-   We DO NOT use fixed height or negative margins.
-   Sticky elements remain in normal flow, so content starts after them. */
+/* Header stays fixed (no overlap because body scrolls under it inside its own area) */
 .topbar{
-  position: sticky;
-  top: 0;
-  z-index: 50;
-
+  flex: 0 0 auto;
   padding: 14px 16px;
   border-bottom: 1px solid rgba(255,255,255,.12);
-
   display: flex;
   justify-content: space-between;
   gap: 16px;
 
-  /* more opaque so you visually see separation */
-  background: linear-gradient(180deg, rgba(8,10,24,.96), rgba(8,10,24,.82));
+  background: linear-gradient(180deg, rgba(8,10,24,.88), rgba(8,10,24,.66));
   backdrop-filter: blur(18px);
   box-shadow: 0 10px 30px rgba(0,0,0,.35);
-  isolation: isolate; /* keeps blend layers sane */
+  z-index: 2;
 }
 
 /* topbar content */
@@ -176,12 +161,10 @@ body{
   background: rgba(255,255,255,.09);
   border-color: rgba(139,92,246,.35);
 }
-
 .topbarRight{ display:flex; align-items:flex-start; gap: 10px; }
 
-/* Main body area */
+/* ✅ ONLY SCROLL CONTAINER */
 .body{
-  /* ✅ The main scroll container */
   flex: 1;
   min-height: 0;
 
@@ -190,18 +173,22 @@ body{
   gap: 12px;
   padding: 12px;
 
-  overflow: auto;
+  overflow: auto;      /* ✅ scrolling happens here */
+  overscroll-behavior: contain;
 }
-.bodyFull{ grid-template-columns: 1fr; }
 
+/* Nice scrollbars (optional) */
+.body::-webkit-scrollbar{ width: 10px; }
+.body::-webkit-scrollbar-thumb{
+  background: rgba(255,255,255,.12);
+  border-radius: 999px;
+}
+.body::-webkit-scrollbar-thumb:hover{ background: rgba(255,255,255,.18); }
+
+.bodyFull{ grid-template-columns: 1fr; }
 .left, .right{ min-width: 0; }
 
-/* Whole page scroll: no internal panel scrolling */
-.panelScroll{
-  height: auto;
-  overflow: visible;
-  padding-right: 0;
-}
+.panelScroll{ height: auto; overflow: visible; padding-right: 0; }
 
 /* Cards */
 .card{
@@ -284,144 +271,12 @@ body{
   border: 1px solid rgba(239,68,68,.25);
 }
 
-/* History */
-.historyTools{ display:flex; gap: 10px; margin-top: 10px; }
-.select{ width: 150px; }
-
-.tableWrap{
-  margin-top: 10px;
-  overflow: auto;
-  border-radius: 14px;
-  border: 1px solid rgba(255,255,255,.08);
-}
-.table{
-  width: 100%;
-  border-collapse: collapse;
-  min-width: 860px;
-}
-.table th, .table td{
-  padding: 10px;
-  border-bottom: 1px solid rgba(255,255,255,.06);
-  vertical-align: top;
-}
-.table th{
-  position: sticky;
-  top: 0;
-  z-index: 1;
-  background: rgba(0,0,0,.28);
-  color: rgba(255,255,255,.70);
-  font-size: 12px;
-  text-align: left;
-}
-
-.row:hover{ background: rgba(255,255,255,.03); }
-.titleCell{ font-weight: 900; margin-bottom: 4px; }
-.mutedSmall{ color: var(--muted); font-size: 12px; }
-
-.mono{ font-family: var(--mono); font-size: 12px; color: rgba(255,255,255,.85); }
-.monoRow{ display:flex; align-items:center; gap: 8px; }
-
-.miniBtn{
-  border: 1px solid rgba(255,255,255,.14);
-  background: rgba(255,255,255,.06);
-  color: rgba(255,255,255,.90);
-  padding: 5px 8px;
-  border-radius: 999px;
-  font-size: 11px;
-  cursor:pointer;
-}
-.miniBtn:hover{ background: rgba(255,255,255,.10); }
-
-/* Status badge */
-.badge{
-  display:inline-flex;
-  align-items:center;
-  border-radius: 999px;
-  padding: 6px 10px;
-  font-size: 12px;
-  border: 1px solid rgba(255,255,255,.12);
-  background: rgba(255,255,255,.05);
-}
-.badge::before{
-  content:"";
-  width: 8px; height: 8px;
-  border-radius: 999px;
-  margin-right: 8px;
-  background: rgba(255,255,255,.35);
-}
-
-.st-done{ border-color: rgba(34,197,94,.28); background: rgba(34,197,94,.10); }
-.st-done::before{ background: var(--good); }
-.st-running{ border-color: rgba(96,165,250,.30); background: rgba(96,165,250,.10); }
-.st-running::before{ background: var(--info); }
-.st-queued{ border-color: rgba(245,158,11,.30); background: rgba(245,158,11,.10); }
-.st-queued::before{ background: var(--warn); }
-.st-failed{ border-color: rgba(239,68,68,.32); background: rgba(239,68,68,.10); }
-.st-failed::before{ background: var(--bad); }
-.st-unknown{ border-color: rgba(255,255,255,.18); background: rgba(255,255,255,.06); }
-
-/* Actions chips */
-.rowActions{ display:flex; gap: 8px; flex-wrap: wrap; }
-.chip, .chipLink, .chipDanger{
-  border-radius: 999px;
-  padding: 8px 10px;
-  font-size: 12px;
-  border: 1px solid rgba(255,255,255,.14);
-  background: rgba(255,255,255,.06);
-  color: rgba(255,255,255,.90);
-  cursor:pointer;
-  text-decoration:none;
-}
-.chip:hover, .chipLink:hover{ background: rgba(255,255,255,.10); }
-.chipDisabled{
-  border-radius: 999px;
-  padding: 8px 10px;
-  font-size: 12px;
-  border: 1px solid rgba(255,255,255,.10);
-  background: rgba(255,255,255,.03);
-  color: rgba(255,255,255,.45);
-}
-.chipDanger{
-  border-color: rgba(239,68,68,.25);
-  background: rgba(239,68,68,.10);
-}
-.chipDanger:hover{ background: rgba(239,68,68,.16); }
-
-/* Compare */
-.right{
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  overflow: visible;
-}
-
-.compareHeader{
-  border: 1px solid rgba(255,255,255,.10);
-  border-radius: var(--r);
-  padding: 14px;
-  background: linear-gradient(180deg, rgba(255,255,255,.08), rgba(255,255,255,.04));
-  box-shadow: 0 12px 40px rgba(0,0,0,.25);
-}
-.compareTitleRow{ display:flex; justify-content: space-between; align-items:center; gap: 10px; }
-.compareTitle{ font-weight: 950; letter-spacing: .2px; }
-.compareHint{ margin-top: 6px; color: var(--muted); font-size: 12px; }
-.compareBadges{ display:flex; gap: 8px; flex-wrap: wrap; }
-
-.miniStatus{
-  font-size: 12px;
-  padding: 6px 10px;
-  border-radius: 999px;
-  border: 1px solid rgba(255,255,255,.12);
-  background: rgba(255,255,255,.05);
-}
-
 /* PDFs */
 .pdfGrid{
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 12px;
 }
-
 .pdfPane{
   border-radius: var(--r);
   border: 1px solid rgba(255,255,255,.10);
@@ -430,38 +285,6 @@ body{
   display: flex;
   flex-direction: column;
 }
-
-.pdfPaneHeader{
-  padding: 10px 12px;
-  border-bottom: 1px solid rgba(255,255,255,.08);
-  background: rgba(255,255,255,.04);
-  display:flex;
-  align-items:center;
-  gap: 10px;
-}
-.paneTitle{ font-weight: 950; }
-.paneMeta{
-  flex: 1;
-  min-width: 0;
-  display:flex;
-  align-items:center;
-  gap: 8px;
-  overflow:hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-}
-.dot{ color: rgba(255,255,255,.35); }
-
-.openBtn{
-  text-decoration:none;
-  border-radius: 999px;
-  padding: 8px 10px;
-  font-size: 12px;
-  background: rgba(255,255,255,.08);
-  border: 1px solid rgba(255,255,255,.12);
-}
-.openBtn:hover{ background: rgba(255,255,255,.12); }
-
 .pdfFill{
   height: 78vh;
   min-height: 520px;
@@ -473,83 +296,9 @@ body{
   background: rgba(0,0,0,.22);
 }
 
-.pdfEmpty{
-  height: 100%;
-  display:flex;
-  align-items:center;
-  justify-content:center;
-  padding: 18px;
-}
-.fancyEmpty{
-  flex-direction: column;
-  gap: 10px;
-  text-align: center;
-}
-.emptyIcon{ font-size: 28px; opacity:.95; }
-.emptyTitle{ font-weight: 950; }
-
-/* Debug */
-.debugPre{
-  margin: 0;
-  max-height: 280px;
-  overflow: auto;
-  font-family: var(--mono);
-  font-size: 12px;
-  padding: 12px;
-  border-radius: 14px;
-  background: rgba(0,0,0,.22);
-  border: 1px solid rgba(255,255,255,.08);
-}
-
-/* Modal */
-.modalOverlay{
-  position: fixed;
-  inset: 0;
-  background: rgba(0,0,0,.60);
-  display:flex;
-  align-items:center;
-  justify-content:center;
-  z-index: 9998;
-  padding: 18px;
-}
-.modalCard{
-  width: min(520px, 92vw);
-  border-radius: 20px;
-  border: 1px solid rgba(255,255,255,.12);
-  background: linear-gradient(180deg, rgba(255,255,255,.12), rgba(255,255,255,.06));
-  box-shadow: var(--shadow);
-  padding: 16px;
-  backdrop-filter: blur(16px);
-}
-.modalTitle{ font-weight: 950; font-size: 16px; }
-.modalSub{ margin-top: 8px; color: var(--muted); font-size: 12px; }
-
-.progressWrap{ margin-top: 12px; display:flex; align-items:center; gap: 10px; }
-.progressBar{
-  flex: 1;
-  height: 10px;
-  border-radius: 999px;
-  overflow: hidden;
-  border: 1px solid rgba(255,255,255,.12);
-  background: rgba(0,0,0,.22);
-}
-.progressFill{
-  height: 100%;
-  border-radius: 999px;
-  background: linear-gradient(90deg, rgba(139,92,246,1), rgba(34,211,238,.95), rgba(244,114,182,.90));
-  transition: width .22s ease;
-}
-.progressPct{
-  width: 54px;
-  text-align: right;
-  font-family: var(--mono);
-  color: rgba(255,255,255,.85);
-  font-size: 12px;
-}
-.modalHint{ margin-top: 12px; color: rgba(255,255,255,.72); font-size: 12px; }
-
 /* Footer */
 .footer{
+  flex: 0 0 auto;
   padding: 10px 12px;
   border-top: 1px solid rgba(255,255,255,.08);
   color: var(--muted);
