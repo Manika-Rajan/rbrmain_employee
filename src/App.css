@@ -23,16 +23,13 @@
   --r2: 14px;
 
   --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
-
-  /* Reserved sticky header height */
-  --header-h: 124px;
 }
 
 *{ box-sizing:border-box; }
 html, body { height: 100%; }
 
-/* Helps focus/scroll jumps avoid getting hidden under the sticky header */
-html { scroll-padding-top: var(--header-h); }
+/* If you ever jump to anchors, avoid hiding behind the sticky bar */
+html { scroll-padding-top: 160px; }
 
 body{
   margin:0;
@@ -116,20 +113,15 @@ body{
   flex-direction: column;
 
   overflow: visible;
-
-  /* ✅ Reserve permanent space for the sticky header
-     so content never slides under it while scrolling */
-  padding-top: var(--header-h);
 }
 
-/* ✅ STICKY HEADER (non-overlapping) */
+/* ✅ Sticky header that does NOT overlap content:
+   We DO NOT use fixed height or negative margins.
+   Sticky elements remain in normal flow, so content starts after them. */
 .topbar{
   position: sticky;
   top: 0;
   z-index: 50;
-
-  height: var(--header-h);
-  margin-top: calc(-1 * var(--header-h));
 
   padding: 14px 16px;
   border-bottom: 1px solid rgba(255,255,255,.12);
@@ -138,10 +130,11 @@ body{
   justify-content: space-between;
   gap: 16px;
 
-  /* sticky glass look */
-  background: linear-gradient(180deg, rgba(8,10,24,.92), rgba(8,10,24,.74));
+  /* more opaque so you visually see separation */
+  background: linear-gradient(180deg, rgba(8,10,24,.96), rgba(8,10,24,.82));
   backdrop-filter: blur(18px);
   box-shadow: 0 10px 30px rgba(0,0,0,.35);
+  isolation: isolate; /* keeps blend layers sane */
 }
 
 /* topbar content */
@@ -184,13 +177,12 @@ body{
 
 /* Main body area */
 .body{
-  flex: 0 0 auto;      /* ✅ allow natural page height */
+  flex: 0 0 auto;
   display: grid;
   grid-template-columns: 520px 1fr;
   gap: 12px;
   padding: 12px;
-
-  overflow: visible;   /* ✅ let page expand */
+  overflow: visible;
 }
 .bodyFull{ grid-template-columns: 1fr; }
 
@@ -559,7 +551,6 @@ body{
 
 /* Responsive */
 @media (max-width: 1100px){
-  :root { --header-h: 156px; }
   .body{ grid-template-columns: 1fr; }
   .pdfGrid{ grid-template-columns: 1fr; }
   .pdfFill{ height: 70vh; min-height: 520px; }
