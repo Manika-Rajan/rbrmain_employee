@@ -1,6 +1,7 @@
 :root{
   --bg0:#050816;
   --bg1:#070A18;
+
   --glass: rgba(255,255,255,.07);
   --glass2: rgba(255,255,255,.10);
   --stroke: rgba(255,255,255,.12);
@@ -11,6 +12,7 @@
   --a:#8B5CF6;     /* violet */
   --b:#22D3EE;     /* cyan */
   --c:#F472B6;     /* pink */
+
   --good:#22C55E;
   --warn:#F59E0B;
   --bad:#EF4444;
@@ -25,20 +27,26 @@
 
 *{ box-sizing:border-box; }
 html, body { height: 100%; }
+
 body{
   margin:0;
   color: var(--text);
-  background: radial-gradient(900px 500px at 10% 0%, rgba(139,92,246,.30), transparent 55%),
-              radial-gradient(900px 500px at 90% 10%, rgba(34,211,238,.20), transparent 60%),
-              radial-gradient(700px 450px at 40% 110%, rgba(244,114,182,.16), transparent 60%),
-              linear-gradient(180deg, var(--bg0), var(--bg1));
+  background:
+    radial-gradient(900px 500px at 10% 0%, rgba(139,92,246,.30), transparent 55%),
+    radial-gradient(900px 500px at 90% 10%, rgba(34,211,238,.20), transparent 60%),
+    radial-gradient(700px 450px at 40% 110%, rgba(244,114,182,.16), transparent 60%),
+    linear-gradient(180deg, var(--bg0), var(--bg1));
   font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial;
-  overflow: hidden; /* IMPORTANT: shell manages scroll */
+
+  /* ✅ page can scroll normally */
+  overflow-y: auto;
+  overflow-x: hidden;
 }
 
+/* Whole page wrapper */
 .page{
   position: relative;
-  height: 100dvh;  /* FIX for mobile/desktop chrome */
+  min-height: 100vh;
   width: 100%;
   padding: 14px;
 }
@@ -55,6 +63,7 @@ body{
   opacity: .95;
   animation: floaty 10s ease-in-out infinite alternate;
   pointer-events: none;
+  z-index: 0;
 }
 @keyframes floaty{
   from{ transform: translate3d(-10px, -6px, 0) scale(1.02); }
@@ -68,6 +77,7 @@ body{
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.8' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='180' height='180' filter='url(%23n)' opacity='.35'/%3E%3C/svg%3E");
   opacity: .07;
   pointer-events: none;
+  z-index: 0;
 }
 
 /* Toast */
@@ -76,7 +86,7 @@ body{
   top: 14px;
   left: 50%;
   transform: translateX(-50%);
-  z-index: 60;
+  z-index: 9999;
   background: rgba(0,0,0,.55);
   border: 1px solid var(--stroke);
   padding: 10px 14px;
@@ -85,27 +95,44 @@ body{
   backdrop-filter: blur(12px);
 }
 
+/* Shell is a "page card" that can grow with content */
 .shell{
   position: relative;
-  height: 100%;
+  z-index: 1; /* above aurora/noise */
+  min-height: calc(100vh - 28px);
+  height: auto;
+
   border-radius: var(--r);
   border: 1px solid rgba(255,255,255,.10);
   background: linear-gradient(180deg, rgba(255,255,255,.06), rgba(255,255,255,.03));
   box-shadow: var(--shadow);
   backdrop-filter: blur(14px);
+
   display: flex;
   flex-direction: column;
-  overflow: hidden; /* IMPORTANT: internal layout scroll */
+
+  overflow: visible;
 }
 
-/* Header */
+/* ✅ STICKY HEADER */
 .topbar{
+  position: sticky;
+  top: 0;
+  z-index: 50;
+
   padding: 14px 16px;
   border-bottom: 1px solid rgba(255,255,255,.10);
+
   display: flex;
   justify-content: space-between;
   gap: 16px;
+
+  /* sticky glass look */
+  background: linear-gradient(180deg, rgba(10,12,30,.78), rgba(10,12,30,.55));
+  backdrop-filter: blur(18px);
 }
+
+/* topbar content */
 .brandRow{ display:flex; align-items:center; gap:10px; }
 .brand{ font-weight: 900; letter-spacing: .3px; font-size: 18px; }
 .pill{
@@ -143,25 +170,25 @@ body{
 
 .topbarRight{ display:flex; align-items:flex-start; gap: 10px; }
 
-/* Body */
+/* Main body area */
 .body{
-  flex: 1;
-  min-height: 0; /* critical for flex scroll */
+  flex: 0 0 auto;  /* ✅ allow natural height */
   display: grid;
   grid-template-columns: 520px 1fr;
   gap: 12px;
   padding: 12px;
-  overflow: hidden;
+
+  overflow: visible; /* ✅ let page expand */
 }
 .bodyFull{ grid-template-columns: 1fr; }
 
-.left, .right{ min-width: 0; min-height: 0; }
+.left, .right{ min-width: 0; }
 
-/* Left panel internal scroll (prevents cropping) */
+/* ✅ whole page scroll: no internal panel scrolling */
 .panelScroll{
-  height: 100%;
-  overflow: auto;
-  padding-right: 6px;
+  height: auto;
+  overflow: visible;
+  padding-right: 0;
 }
 
 /* Cards */
@@ -175,6 +202,7 @@ body{
   background: linear-gradient(180deg, rgba(255,255,255,.08), rgba(255,255,255,.04));
   backdrop-filter: blur(14px);
 }
+
 .cardTitleRow{ display:flex; justify-content: space-between; align-items:center; gap: 12px; }
 .cardTitle{ font-weight: 900; letter-spacing: .2px; }
 
@@ -349,11 +377,10 @@ body{
 
 /* Compare */
 .right{
-  min-height: 0;
   display: flex;
   flex-direction: column;
   gap: 12px;
-  overflow: hidden;
+  overflow: visible;
 }
 
 .compareHeader{
@@ -376,14 +403,11 @@ body{
   background: rgba(255,255,255,.05);
 }
 
-/* PDF grid fills remaining height – no cropping */
+/* PDFs: fixed nice height so page scroll is meaningful */
 .pdfGrid{
-  flex: 1;
-  min-height: 0;
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 12px;
-  overflow: hidden;
 }
 
 .pdfPane{
@@ -393,7 +417,6 @@ body{
   overflow: hidden;
   display: flex;
   flex-direction: column;
-  min-height: 0;
 }
 
 .pdfPaneHeader{
@@ -427,10 +450,9 @@ body{
 }
 .openBtn:hover{ background: rgba(255,255,255,.12); }
 
-/* This is the key fix */
 .pdfFill{
-  flex: 1;
-  min-height: 0;
+  height: 78vh;     /* ✅ viewer size */
+  min-height: 520px;
 }
 .pdfFrame{
   width: 100%;
@@ -438,6 +460,7 @@ body{
   border: 0;
   background: rgba(0,0,0,.22);
 }
+
 .pdfEmpty{
   height: 100%;
   display:flex;
@@ -454,6 +477,7 @@ body{
 .emptyIcon{ font-size: 28px; opacity:.95; }
 .emptyTitle{ font-weight: 950; }
 
+/* Debug */
 .debugPre{
   margin: 0;
   max-height: 280px;
@@ -474,7 +498,7 @@ body{
   display:flex;
   align-items:center;
   justify-content:center;
-  z-index: 80;
+  z-index: 9998;
   padding: 18px;
 }
 .modalCard{
@@ -513,6 +537,7 @@ body{
 }
 .modalHint{ margin-top: 12px; color: rgba(255,255,255,.72); font-size: 12px; }
 
+/* Footer */
 .footer{
   padding: 10px 12px;
   border-top: 1px solid rgba(255,255,255,.08);
@@ -523,11 +548,7 @@ body{
 
 /* Responsive */
 @media (max-width: 1100px){
-  body{ overflow: auto; }
-  .shell{ overflow: visible; }
-  .body{ grid-template-columns: 1fr; overflow: visible; }
-  .panelScroll{ height: auto; overflow: visible; padding-right: 0; }
-  .right{ overflow: visible; }
+  .body{ grid-template-columns: 1fr; }
   .pdfGrid{ grid-template-columns: 1fr; }
-  .pdfPane{ min-height: 62vh; }
+  .pdfFill{ height: 70vh; min-height: 520px; }
 }
