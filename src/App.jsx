@@ -734,7 +734,7 @@ export default function App() {
   const rightStatus = prettyStatus(rightItem?.status);
 
   return (
-    <div className="page" data-theme={isPrebook ? "prebook" : "instant"}
+    <div className={clsx("page", isPrebook && "themePrebook")} data-theme={isPrebook ? "prebook" : "instant"}
       style={{
         minHeight: "100vh",
         height: "auto",
@@ -780,11 +780,11 @@ export default function App() {
       ) : null}
 
       {/* SHELL fixes cropping: header + body with internal scroll */}
-      <div className="shell" style={{ width: "100%", maxWidth: "none", overflow: "visible" }}>
+      <div className={clsx("shell", isPrebook && "themePrebook")} style={{ width: "100%", maxWidth: "none", overflow: "visible" }}>
         <header className="topbar" ref={headerRef}
           style={{
-            position: "sticky",
-            top: 0,
+            position: "relative",
+            
             zIndex: 100,
             backdropFilter: "blur(12px)",
             WebkitBackdropFilter: "blur(12px)",
@@ -871,8 +871,8 @@ export default function App() {
           <section
             className="card glass"
             style={{
-              position: "sticky",
-              top: "var(--header-h)",
+              position: "relative",
+              
               zIndex: 90,
               marginTop: 14,
               marginBottom: 14,
