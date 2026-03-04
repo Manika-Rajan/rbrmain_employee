@@ -49,7 +49,7 @@ body{
   font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial;
 
   /* ✅ Dashboard pattern: ONLY inner scroll */
-  overflow: hidden;
+  overflow: auto;
 }
 
 /* =========================
@@ -57,13 +57,14 @@ body{
    ========================= */
 .page{
   position: relative;
-  height: 100%;
+  min-height: 100vh;
+  height: auto;
   width: 100%;
 
   /* ✅ full width shell (no side padding) */
   padding: 0;
 
-  overflow: hidden;
+  overflow: visible;
 }
 
 /* Animated aurora (behind everything) */
@@ -112,7 +113,8 @@ body{
 .shell{
   position: relative;
   z-index: 1;
-  height: 100%;
+  min-height: 100vh;
+  height: auto;
   width: 100%;
 
   /* full width edge-to-edge */
@@ -127,7 +129,7 @@ body{
   backdrop-filter: blur(14px);
   display: flex;
   flex-direction: column;
-  overflow: hidden;
+  overflow: visible;
 
   /* ✅ smooth page transition */
   animation: pageIn .45s ease both;
@@ -219,15 +221,15 @@ body{
    Main scroll container
    ========================= */
 .body{
-  flex: 1;
-  min-height: 0;
+  flex: 0 0 auto;
+  min-height: auto;
 
   display: grid;
   grid-template-columns: var(--sidebar) 1fr;
   gap: var(--s2);
   padding: var(--s2);
 
-  overflow: auto;
+  overflow: visible;
   overscroll-behavior: contain;
 
   /* ✅ smooth scrolling */
@@ -432,4 +434,37 @@ body{
   .shell, .card, .compareHeader, .pdfPane, .tableWrap{ animation: none !important; }
   .aurora{ animation: none !important; }
   .body{ scroll-behavior: auto; }
+}
+
+
+
+/* =========================
+   Pre-book theme (stronger)
+   ========================= */
+.themePrebook{
+  /* Swap accent priorities to feel different from Instant */
+  --a:#A855F7;  /* purple */
+  --b:#F472B6;  /* pink */
+  --c:#22D3EE;  /* cyan */
+}
+
+.themePrebook .shell{
+  background:
+    linear-gradient(180deg, rgba(255,255,255,.06), rgba(255,255,255,.03)),
+    radial-gradient(900px 520px at 20% 0%, rgba(244,114,182,.14), transparent 62%),
+    radial-gradient(900px 520px at 70% 0%, rgba(168,85,247,.16), transparent 62%),
+    radial-gradient(900px 520px at 95% 20%, rgba(34,211,238,.06), transparent 62%);
+}
+
+.themePrebook .topbar{
+  border-bottom-color: rgba(244,114,182,.22);
+}
+
+.themePrebook .chipPill:hover{
+  border-color: rgba(244,114,182,.40);
+}
+
+.themePrebook .btn{
+  background: linear-gradient(135deg, rgba(168,85,247,1), rgba(244,114,182,.88), rgba(34,211,238,.55));
+  box-shadow: 0 12px 42px rgba(244,114,182,.20);
 }
