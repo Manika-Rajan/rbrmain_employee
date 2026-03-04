@@ -41,6 +41,26 @@ function saveHistory(items) {
   } catch {}
 }
 
+const PREBOOK_STORAGE_KEY = "rbr_prebook_lab_history_v1";
+
+function loadPrebookHistory() {
+  try {
+    const raw = localStorage.getItem(PREBOOK_STORAGE_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed;
+  } catch {
+    return [];
+  }
+}
+
+function savePrebookHistory(items) {
+  try {
+    localStorage.setItem(PREBOOK_STORAGE_KEY, JSON.stringify(items));
+  } catch {}
+}
+
 function nowIso() {
   return new Date().toISOString();
 }
@@ -93,16 +113,40 @@ export default function App() {
   const STATUS_API = import.meta.env.VITE_STATUS_API;
   const PRESIGN_API = import.meta.env.VITE_PRESIGN_API;
 
+  // PRE-BOOK (experimental) APIs
+  const PREBOOK_QUOTA_API = import.meta.env.VITE_PREBOOK_QUOTA_API;
+  const PREBOOK_GENERATE_API = import.meta.env.VITE_PREBOOK_GENERATE_API;
+  // Optional: separate presign endpoint; falls back to the instant presign API
+  const PREBOOK_PRESIGN_API =
+    import.meta.env.VITE_PREBOOK_PRESIGN_API || PRESIGN_API;
+
   const [topic, setTopic] = useState("FMCG market report India");
   const [questions, setQuestions] = useState(DEFAULT_QUESTIONS);
 
-  const [loading, setLoading] = useState(false);
+  // Tabs
+  const [activeTab, setActiveTab] = useState("instant"); // "instant" | "prebook"
+
+  // Pre-book inputs (kept separate from Instant to avoid overwriting)
+  const [prebookTopic, setPrebookTopic] = useState("FMCG market report India");
+  const [prebookQuestions, setPrebookQuestions] = useState(DEFAULT_QUESTIONS);
+
+  // Pre-book quota display
+  const [quota, setQuota] = useState({ limit: 0, used: 0, remaining: 0 });
+  const [quotaLoading, setQuotaLoading] = useState(false);
+  const [quotaError, setQuotaError] = useState("");
+
+  const \[loading, setLoading\] = useState\(false\);
+  const [prebookLoading, setPrebookLoading] = useState(false);
   const [error, setError] = useState("");
   const [lastApiResponse, setLastApiResponse] = useState(null);
 
   const [history, setHistory] = useState(() => loadHistory());
   const [leftId, setLeftId] = useState(null);
   const [rightId, setRightId] = useState(null);
+
+  const [prebookHistory, setPrebookHistory] = useState(() => loadPrebookHistory());
+  const [preLeftId, setPreLeftId] = useState(null);
+  const [preRightId, setPreRightId] = useState(null);
   const [leftHidden, setLeftHidden] = useState(false);
 
   // Fancy UX extras
@@ -158,7 +202,8 @@ export default function App() {
     };
   }, []);
 
-  useEffect(() => saveHistory(history), [history]);
+  useEffect\(\(\) => saveHistory\(history\), \[history\]\);
+  useEffect(() => savePrebookHistory(prebookHistory), [prebookHistory]);
 
   useEffect(() => {
     if (!history.length) return;
@@ -172,39 +217,96 @@ export default function App() {
   }, [history]);
 
   useEffect(() => {
+    if (!prebookHistory.length) return;
+    const sorted = [...prebookHistory].sort(
+      (a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0)
+    );
+    const first = sorted[0]?.id ?? null;
+    const second = sorted[1]?.id ?? null;
+    setPreLeftId((prev) => prev ?? first);
+    setPreRightId((prev) => prev ?? second ?? first);
+  }, [prebookHistory]);
+
+
+  useEffect(() => {
     if (!toast) return;
     const t = setTimeout(() => setToast(""), 1700);
     return () => clearTimeout(t);
   }, [toast]);
 
+  useEffect(() => {
+    if (activeTab === "prebook") {
+      loadQuota();
+    }
+  }, [activeTab]);
+
+
+  const activeHistory = activeTab === "instant" ? history : prebookHistory;
+
+  const leftSelId = activeTab === "instant" ? leftId : preLeftId;
+  const rightSelId = activeTab === "instant" ? rightId : preRightId;
+
   const leftItem = useMemo(
-    () => history.find((x) => x.id === leftId) || null,
-    [history, leftId]
+    () => activeHistory.find((x) => x.id === leftSelId) || null,
+    [activeHistory, leftSelId]
   );
   const rightItem = useMemo(
-    () => history.find((x) => x.id === rightId) || null,
-    [history, rightId]
+    () => activeHistory.find((x) => x.id === rightSelId) || null,
+    [activeHistory, rightSelId]
   );
+
 
   const filteredHistory = useMemo(() => {
     const q = normalize(historyQuery);
     const sf = normalize(statusFilter);
-    return [...history].filter((h) => {
+    return [...activeHistory].filter((h) => {
       const matchesQ =
         !q ||
         normalize(h.title).includes(q) ||
         normalize(h.topic).includes(q) ||
-        normalize(h.instantId).includes(q);
+        normalize(h.instantId).includes(q) ||
+        normalize(h.reportId).includes(q);
 
       const st = prettyStatus(h.status);
       const matchesStatus = sf === "all" ? true : st === sf;
 
       return matchesQ && matchesStatus;
     });
-  }, [history, historyQuery, statusFilter]);
+  }, [activeHistory, historyQuery, statusFilter]);
 
   function updateQuestion(i, val) {
     setQuestions((prev) => prev.map((q, idx) => (idx === i ? val : q)));
+  }
+
+
+  function updatePrebookQuestion(i, val) {
+    setPrebookQuestions((prev) => prev.map((q, idx) => (idx === i ? val : q)));
+  }
+
+  async function loadQuota() {
+    setQuotaError("");
+    if (!ensurePrebookEnv()) return;
+
+    setQuotaLoading(true);
+    try {
+      const { res, data } = await fetchJson(PREBOOK_QUOTA_API, {
+        method: "GET",
+      });
+
+      if (!res.ok || !data?.ok) {
+        throw new Error(buildErrorMessage(res, data, "Quota API failed"));
+      }
+
+      setQuota({
+        limit: Number(data.limit || 0),
+        used: Number(data.used || 0),
+        remaining: Number(data.remaining || 0),
+      });
+    } catch (e) {
+      setQuotaError(e?.message || "Failed to load quota");
+    } finally {
+      setQuotaLoading(false);
+    }
   }
 
   function ensureEnv() {
@@ -212,6 +314,22 @@ export default function App() {
     if (!CONFIRM_API) missing.push("VITE_CONFIRM_API");
     if (!STATUS_API) missing.push("VITE_STATUS_API");
     if (!PRESIGN_API) missing.push("VITE_PRESIGN_API");
+    if (missing.length) {
+      setError(
+        `Missing env var(s): ${missing.join(
+          ", "
+        )}. Add them in Amplify env vars and redeploy.`
+      );
+      return false;
+    }
+    return true;
+  }
+
+
+  function ensurePrebookEnv() {
+    const missing = [];
+    if (!PREBOOK_QUOTA_API) missing.push("VITE_PREBOOK_QUOTA_API");
+    if (!PREBOOK_GENERATE_API) missing.push("VITE_PREBOOK_GENERATE_API");
     if (missing.length) {
       setError(
         `Missing env var(s): ${missing.join(
@@ -305,8 +423,9 @@ export default function App() {
     }
   }
 
-  async function getPresignedUrl({ userPhone, instantId, s3Key }) {
-    const url = new URL(PRESIGN_API);
+  async function getPresignedUrl({ userPhone, instantId, s3Key, api }) {
+    const endpoint = api || PRESIGN_API;
+    const url = new URL(endpoint);
     if (s3Key) url.searchParams.set("s3Key", s3Key);
     else {
       url.searchParams.set("userPhone", userPhone);
@@ -440,26 +559,147 @@ export default function App() {
     }
   }
 
+
+  function upsertPrebookItem(id, patch) {
+    setPrebookHistory((prev) =>
+      prev.map((x) => (x.id === id ? { ...x, ...patch } : x))
+    );
+  }
+
+  async function generatePrebook() {
+    setError("");
+    setQuotaError("");
+    setLastApiResponse(null);
+
+    if (!ensurePrebookEnv()) return;
+
+    const t = prebookTopic.trim();
+    const qs = prebookQuestions.map((q) => (q || "").trim());
+
+    if (!t) return setError("Please enter a topic.");
+    if (qs.some((q) => !q)) return setError("Please fill all 5 questions.");
+
+    // Enforce global daily cap (shown in UI)
+    if ((quota?.remaining ?? 0) <= 0) {
+      return setError("Daily Pre-book limit reached. Try again tomorrow.");
+    }
+
+    setPrebookLoading(true);
+
+    try {
+      const payload = {
+        bypass: true,
+        employeeId: "10000001",
+        query: t,
+        questions: qs,
+      };
+
+      // Create an optimistic history item immediately
+      const historyId = `prebook-${Date.now()}`;
+      const newItem = {
+        id: historyId,
+        createdAt: nowIso(),
+        topic: t,
+        title: t,
+        reportId: "",
+        status: "running",
+        pdfUrl: "",
+        s3Key: "",
+        raw: null,
+      };
+
+      setPrebookHistory((prev) => [newItem, ...prev]);
+
+      const { res, data } = await fetchJson(PREBOOK_GENERATE_API, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+
+      setLastApiResponse(data);
+
+      if (!res.ok || !data?.ok) {
+        throw new Error(buildErrorMessage(res, data, "Pre-book generate failed"));
+      }
+
+      const reportId = data.reportId || data.report_id || data.prebookId || data.id || "";
+      const s3Key = data.s3Key || data.s3_key || "";
+      const presignedUrl =
+        data.presignedUrl || data.presigned_url || data.url || data.presignedURL || "";
+
+      let pdfUrl = presignedUrl;
+
+      // If backend doesn't return a URL, try presign using s3Key
+      if (!pdfUrl && s3Key) {
+        const { presignedUrl: u } = await getPresignedUrl({
+          s3Key,
+          api: PREBOOK_PRESIGN_API,
+        });
+        pdfUrl = u;
+      }
+
+      upsertPrebookItem(historyId, {
+        title: data.title || t,
+        reportId,
+        status: data.status || "done",
+        s3Key,
+        pdfUrl: pdfUrl ? bustPdfUrl(pdfUrl) : "",
+        raw: data,
+      });
+
+      // Refresh quota numbers in UI
+      await loadQuota();
+      setToast("Pre-book report generated ✅");
+    } catch (e) {
+      setError(e?.message || "Pre-book generation failed");
+      setToast("Pre-book generation failed");
+    } finally {
+      setPrebookLoading(false);
+    }
+  }
+
   function setLeft(itemId) {
-    setLeftId(itemId);
-    if (itemId === rightId) {
-      const alt = history.find((x) => x.id !== itemId)?.id || itemId;
-      setRightId(alt);
+    if (activeTab === "instant") {
+      setLeftId(itemId);
+      if (itemId === rightId) {
+        const alt = history.find((x) => x.id !== itemId)?.id || itemId;
+        setRightId(alt);
+      }
+    } else {
+      setPreLeftId(itemId);
+      if (itemId === preRightId) {
+        const alt = prebookHistory.find((x) => x.id !== itemId)?.id || itemId;
+        setPreRightId(alt);
+      }
     }
   }
 
   function setRight(itemId) {
-    setRightId(itemId);
-    if (itemId === leftId) {
-      const alt = history.find((x) => x.id !== itemId)?.id || itemId;
-      setLeftId(alt);
+    if (activeTab === "instant") {
+      setRightId(itemId);
+      if (itemId === leftId) {
+        const alt = history.find((x) => x.id !== itemId)?.id || itemId;
+        setLeftId(alt);
+      }
+    } else {
+      setPreRightId(itemId);
+      if (itemId === preLeftId) {
+        const alt = prebookHistory.find((x) => x.id !== itemId)?.id || itemId;
+        setPreLeftId(alt);
+      }
     }
   }
 
   function removeItem(itemId) {
-    setHistory((prev) => prev.filter((x) => x.id !== itemId));
-    if (leftId === itemId) setLeftId(null);
-    if (rightId === itemId) setRightId(null);
+    if (activeTab === "instant") {
+      setHistory((prev) => prev.filter((x) => x.id !== itemId));
+      if (leftId === itemId) setLeftId(null);
+      if (rightId === itemId) setRightId(null);
+    } else {
+      setPrebookHistory((prev) => prev.filter((x) => x.id !== itemId));
+      if (preLeftId === itemId) setPreLeftId(null);
+      if (preRightId === itemId) setPreRightId(null);
+    }
   }
 
   async function copyToClipboard(text) {
@@ -515,26 +755,53 @@ export default function App() {
         <header className="topbar" ref={headerRef}>
           <div className="topbarLeft">
             <div className="brandRow">
-              <div className="brand">RBR Instant Lab</div>
+              <div className="brand">RBR Report Lab</div>
               <span className="pill">Internal</span>
             </div>
             <div className="sub">
               Generate multiple reports and compare quality side-by-side.
             </div>
-
-            <div className="quickChips">
-              {QUICK_TOPICS.map((t) => (
-                <button
-                  key={t}
-                  className="chipPill"
-                  onClick={() => setTopic(t)}
-                  type="button"
-                  title="Use this topic"
-                >
-                  {t}
-                </button>
-              ))}
+            <div style={{ display: "flex", gap: 10, marginTop: 10, flexWrap: "wrap" }}>
+              <button
+                type="button"
+                className="chipPill"
+                onClick={() => setActiveTab("instant")}
+                style={{
+                  border: activeTab === "instant" ? "1px solid rgba(255,255,255,0.45)" : undefined,
+                  background: activeTab === "instant" ? "rgba(255,255,255,0.14)" : undefined,
+                }}
+              >
+                Instant Report Work Desk
+              </button>
+              <button
+                type="button"
+                className="chipPill"
+                onClick={() => setActiveTab("prebook")}
+                style={{
+                  border: activeTab === "prebook" ? "1px solid rgba(255,255,255,0.45)" : undefined,
+                  background: activeTab === "prebook" ? "rgba(255,255,255,0.14)" : undefined,
+                }}
+              >
+                Pre-book Report Work Desk
+              </button>
             </div>
+
+            {activeTab === "instant" ? (
+              <div className="quickChips">
+                {QUICK_TOPICS.map((t) => (
+                  <button
+                    key={t}
+                    className="chipPill"
+                    onClick={() => setTopic(t)}
+                    type="button"
+                    title="Use this topic"
+                  >
+                    {t}
+                  </button>
+                ))}
+              </div>
+            ) : null}
+
           </div>
 
           <div className="topbarRight">
@@ -560,53 +827,134 @@ export default function App() {
           {!leftHidden && (
             <aside className="left">
               <div className="panelScroll">
-                <div className="card glass">
-                  <div className="cardTitleRow">
-                    <div className="cardTitle">Generate</div>
-                    <button
-                      className="linkBtn"
-                      onClick={() => setQuestions(DEFAULT_QUESTIONS)}
-                      type="button"
-                    >
-                      Reset questions
-                    </button>
+                {activeTab === "instant" ? (
+                  <div className="card glass">
+                    <div className="cardTitleRow">
+                      <div className="cardTitle">Generate (Instant)</div>
+                      <button
+                        className="linkBtn"
+                        onClick={() => setQuestions(DEFAULT_QUESTIONS)}
+                        type="button"
+                      >
+                        Reset questions
+                      </button>
+                    </div>
+
+                    <label className="label">Topic</label>
+                    <input
+                      className="input"
+                      value={topic}
+                      onChange={(e) => setTopic(e.target.value)}
+                      placeholder="e.g., FMCG market report India"
+                    />
+
+                    <div className="qGrid">
+                      {questions.map((q, i) => (
+                        <div key={i} className="qBlock">
+                          <label className="label">Question {i + 1}</label>
+                          <textarea
+                            className="textarea"
+                            value={q}
+                            onChange={(e) => updateQuestion(i, e.target.value)}
+                            rows={2}
+                          />
+                        </div>
+                      ))}
+                    </div>
+
+                    <div className="actions">
+                      <button className="btn" onClick={generate} disabled={loading}>
+                        {loading ? "Generating..." : "Generate PDF"}
+                      </button>
+                    </div>
+
+                    {error ? <div className="errorBox">Error: {error}</div> : null}
                   </div>
-
-                  <label className="label">Topic</label>
-                  <input
-                    className="input"
-                    value={topic}
-                    onChange={(e) => setTopic(e.target.value)}
-                    placeholder="e.g., FMCG market report India"
-                  />
-
-                  <div className="qGrid">
-                    {questions.map((q, i) => (
-                      <div key={i} className="qBlock">
-                        <label className="label">Question {i + 1}</label>
-                        <textarea
-                          className="textarea"
-                          value={q}
-                          onChange={(e) => updateQuestion(i, e.target.value)}
-                          rows={2}
-                        />
+                ) : (
+                  <div className="card glass">
+                    <div className="cardTitleRow">
+                      <div className="cardTitle">Generate (Pre-book)</div>
+                      <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+                        <button className="linkBtn" onClick={loadQuota} type="button">
+                          {quotaLoading ? "Refreshing…" : "Refresh quota"}
+                        </button>
+                        <button
+                          className="linkBtn"
+                          onClick={() => setPrebookQuestions(DEFAULT_QUESTIONS)}
+                          type="button"
+                        >
+                          Reset questions
+                        </button>
                       </div>
-                    ))}
-                  </div>
+                    </div>
 
-                  <div className="actions">
-                    <button className="btn" onClick={generate} disabled={loading}>
-                      {loading ? "Generating..." : "Generate PDF"}
-                    </button>
-                  </div>
+                    <div className="hintBox" style={{ marginTop: 10 }}>
+                      <div style={{ display: "flex", gap: 14, flexWrap: "wrap" }}>
+                        <div>
+                          <div className="mutedSmall">Daily limit</div>
+                          <div className="mono" style={{ fontSize: 16 }}>{quota.limit}</div>
+                        </div>
+                        <div>
+                          <div className="mutedSmall">Generated today</div>
+                          <div className="mono" style={{ fontSize: 16 }}>{quota.used}</div>
+                        </div>
+                        <div>
+                          <div className="mutedSmall">Remaining</div>
+                          <div className="mono" style={{ fontSize: 16 }}>{quota.remaining}</div>
+                        </div>
+                      </div>
+                      {quotaError ? (
+                        <div className="mutedSmall" style={{ marginTop: 8 }}>
+                          {quotaError}
+                        </div>
+                      ) : null}
+                      {quota.remaining <= 0 ? (
+                        <div className="mutedSmall" style={{ marginTop: 8 }}>
+                          Daily limit reached — generation disabled.
+                        </div>
+                      ) : null}
+                    </div>
 
-                  {error ? <div className="errorBox">Error: {error}</div> : null}
-                </div>
+                    <label className="label" style={{ marginTop: 12 }}>Topic</label>
+                    <input
+                      className="input"
+                      value={prebookTopic}
+                      onChange={(e) => setPrebookTopic(e.target.value)}
+                      placeholder="e.g., Indian EV charging market 2026"
+                    />
+
+                    <div className="qGrid">
+                      {prebookQuestions.map((q, i) => (
+                        <div key={i} className="qBlock">
+                          <label className="label">Question {i + 1}</label>
+                          <textarea
+                            className="textarea"
+                            value={q}
+                            onChange={(e) => updatePrebookQuestion(i, e.target.value)}
+                            rows={2}
+                          />
+                        </div>
+                      ))}
+                    </div>
+
+                    <div className="actions">
+                      <button
+                        className="btn"
+                        onClick={generatePrebook}
+                        disabled={prebookLoading || quota.remaining <= 0}
+                      >
+                        {prebookLoading ? "Generating..." : "Generate PDF"}
+                      </button>
+                    </div>
+
+                    {error ? <div className="errorBox">Error: {error}</div> : null}
+                  </div>
+                )}
 
                 <div className="card" style={{ marginTop: 12 }}>
                   <div className="cardTitleRow">
-                    <div className="cardTitle">Generated Reports</div>
-                    <div className="mutedSmall">{history.length} items</div>
+                    <div className="cardTitle">Generated Reports ({activeTab === "instant" ? "Instant" : "Pre-book"})</div>
+                    <div className="mutedSmall">{activeHistory.length} items</div>
                   </div>
 
                   <div className="historyTools">
@@ -645,7 +993,7 @@ export default function App() {
                           <tr>
                             <th style={{ width: 150 }}>Time</th>
                             <th>Topic</th>
-                            <th style={{ width: 120 }}>Instant</th>
+                            <th style={{ width: 140 }}>{activeTab === "instant" ? "Instant" : "Pre-book"}</th>
                             <th style={{ width: 105 }}>Status</th>
                             <th style={{ width: 320 }}>Actions</th>
                           </tr>
@@ -664,11 +1012,11 @@ export default function App() {
                                 </td>
                                 <td className="mono">
                                   <div className="monoRow">
-                                    <span>{h.instantId || "-"}</span>
-                                    {h.instantId ? (
+                                    <span>{activeTab === "instant" ? (h.instantId || "-") : (h.reportId || "-")}</span>
+                                    {(activeTab === "instant" ? h.instantId : h.reportId) ? (
                                       <button
                                         className="miniBtn"
-                                        onClick={() => copyToClipboard(h.instantId)}
+                                        onClick={() => copyToClipboard(activeTab === "instant" ? h.instantId : h.reportId)}
                                         type="button"
                                       >
                                         Copy
@@ -759,7 +1107,7 @@ export default function App() {
                   <div className="paneMeta">
                     {leftItem ? (
                       <>
-                        <span className="mono">{leftItem.instantId || leftItem.id}</span>
+                        <span className="mono">{leftItem.instantId || leftItem.reportId || leftItem.id}</span>
                         <span className="dot">•</span>
                         <span className="mutedSmall">{leftItem.title || leftItem.topic}</span>
                       </>
@@ -793,7 +1141,7 @@ export default function App() {
                   <div className="paneMeta">
                     {rightItem ? (
                       <>
-                        <span className="mono">{rightItem.instantId || rightItem.id}</span>
+                        <span className="mono">{rightItem.instantId || rightItem.reportId || rightItem.id}</span>
                         <span className="dot">•</span>
                         <span className="mutedSmall">{rightItem.title || rightItem.topic}</span>
                       </>
