@@ -135,7 +135,7 @@ export default function App() {
   const [quotaLoading, setQuotaLoading] = useState(false);
   const [quotaError, setQuotaError] = useState("");
 
-  const \[loading, setLoading\] = useState\(false\);
+  const [loading, setLoading] = useState(false);
   const [prebookLoading, setPrebookLoading] = useState(false);
   const [error, setError] = useState("");
   const [lastApiResponse, setLastApiResponse] = useState(null);
@@ -202,7 +202,7 @@ export default function App() {
     };
   }, []);
 
-  useEffect\(\(\) => saveHistory\(history\), \[history\]\);
+  useEffect(() => saveHistory(history), [history]);
   useEffect(() => savePrebookHistory(prebookHistory), [prebookHistory]);
 
   useEffect(() => {
