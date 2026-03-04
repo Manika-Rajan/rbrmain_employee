@@ -734,7 +734,17 @@ export default function App() {
   const rightStatus = prettyStatus(rightItem?.status);
 
   return (
-    <div className="page" data-theme={isPrebook ? "prebook" : "instant"} style={isPrebook ? { background: "radial-gradient(1200px 700px at 18% -10%, rgba(168,85,247,0.22), transparent 55%), radial-gradient(900px 500px at 88% 0%, rgba(236,72,153,0.16), transparent 55%), radial-gradient(1000px 650px at 50% 110%, rgba(59,130,246,0.10), transparent 60%)" } : undefined}>
+    <div className="page" data-theme={isPrebook ? "prebook" : "instant"}
+      style={{
+        minHeight: "100vh",
+        height: "auto",
+        overflowX: "hidden",
+        overflowY: "auto",
+        backgroundColor: isPrebook ? "rgb(10, 8, 18)" : "rgb(8, 12, 20)",
+        backgroundImage: isPrebook
+          ? "radial-gradient(1200px 700px at 18% -10%, rgba(168,85,247,0.26), transparent 55%), radial-gradient(900px 500px at 88% 0%, rgba(236,72,153,0.20), transparent 55%), radial-gradient(1000px 650px at 50% 110%, rgba(59,130,246,0.12), transparent 60%)"
+          : "radial-gradient(1200px 700px at 18% -10%, rgba(37,99,235,0.22), transparent 55%), radial-gradient(900px 500px at 88% 0%, rgba(14,165,233,0.16), transparent 55%), radial-gradient(1000px 650px at 50% 110%, rgba(99,102,241,0.10), transparent 60%)",
+      }}>
       {/* Ambient background */}
       <div className="aurora" aria-hidden="true" />
       <div className="noise" aria-hidden="true" />
@@ -770,8 +780,22 @@ export default function App() {
       ) : null}
 
       {/* SHELL fixes cropping: header + body with internal scroll */}
-      <div className="shell">
-        <header className="topbar" ref={headerRef}>
+      <div className="shell" style={{ width: "100%", maxWidth: "none", overflow: "visible" }}>
+        <header className="topbar" ref={headerRef}
+          style={{
+            position: "sticky",
+            top: 0,
+            zIndex: 100,
+            backdropFilter: "blur(12px)",
+            WebkitBackdropFilter: "blur(12px)",
+            borderBottom: `1px solid ${theme.accentBorder}`,
+            background: isPrebook
+              ? "linear-gradient(180deg, rgba(20,10,40,0.78), rgba(10,8,18,0.58))"
+              : "linear-gradient(180deg, rgba(10,18,40,0.78), rgba(8,12,20,0.58))",
+            boxShadow: isPrebook
+              ? "0 10px 40px rgba(168,85,247,0.16)"
+              : "0 10px 40px rgba(37,99,235,0.16)",
+          }}>
           <div className="topbarLeft">
             <div className="brandRow">
               <div className="brand">RBR Report Lab</div>
@@ -786,8 +810,9 @@ export default function App() {
                 className="chipPill"
                 onClick={() => setActiveTab("instant")}
                 style={{
-                  border: activeTab === "instant" ? "1px solid rgba(255,255,255,0.45)" : undefined,
-                  background: activeTab === "instant" ? "rgba(255,255,255,0.14)" : undefined,
+                  border: activeTab === "instant" ? "1px solid rgba(37,99,235,0.55)" : "1px solid rgba(255,255,255,0.14)",
+                  background: activeTab === "instant" ? "rgba(37,99,235,0.18)" : "rgba(255,255,255,0.08)",
+                  color: activeTab === "instant" ? "rgba(219,234,254,0.98)" : "rgba(255,255,255,0.88)",
                 }}
               >
                 Instant Report Work Desk
@@ -797,8 +822,9 @@ export default function App() {
                 className="chipPill"
                 onClick={() => setActiveTab("prebook")}
                 style={{
-                  border: activeTab === "prebook" ? "1px solid rgba(255,255,255,0.45)" : undefined,
-                  background: activeTab === "prebook" ? "rgba(255,255,255,0.14)" : undefined,
+                  border: activeTab === "prebook" ? `1px solid ${theme.accentBorder}` : "1px solid rgba(255,255,255,0.14)",
+                  background: activeTab === "prebook" ? theme.accentSoft : "rgba(255,255,255,0.08)",
+                  color: activeTab === "prebook" ? "rgba(245,208,254,0.98)" : "rgba(255,255,255,0.88)",
                 }}
               >
                 Pre-book Report Work Desk
@@ -845,6 +871,9 @@ export default function App() {
           <section
             className="card glass"
             style={{
+              position: "sticky",
+              top: "var(--header-h)",
+              zIndex: 90,
               marginTop: 14,
               marginBottom: 14,
               border: `1px solid ${theme.accentBorder}`,
