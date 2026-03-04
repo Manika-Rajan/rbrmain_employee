@@ -126,6 +126,25 @@ export default function App() {
   // Tabs
   const [activeTab, setActiveTab] = useState("instant"); // "instant" | "prebook"
 
+  const isPrebook = activeTab === "prebook";
+
+  // Theme accents
+  const theme = useMemo(() => {
+    return isPrebook
+      ? {
+          accent: "#a855f7",
+          accentSoft: "rgba(168,85,247,0.16)",
+          accentBorder: "rgba(168,85,247,0.35)",
+          panelBg: "rgba(10,10,20,0.55)",
+        }
+      : {
+          accent: "#2563eb",
+          accentSoft: "rgba(37,99,235,0.16)",
+          accentBorder: "rgba(37,99,235,0.35)",
+          panelBg: "rgba(10,12,18,0.55)",
+        };
+  }, [isPrebook]);
+
   // Pre-book inputs (kept separate from Instant to avoid overwriting)
   const [prebookTopic, setPrebookTopic] = useState("FMCG market report India");
   const [prebookQuestions, setPrebookQuestions] = useState(DEFAULT_QUESTIONS);
@@ -715,7 +734,7 @@ export default function App() {
   const rightStatus = prettyStatus(rightItem?.status);
 
   return (
-    <div className="page">
+    <div className="page" data-theme={isPrebook ? "prebook" : "instant"} style={isPrebook ? { background: "radial-gradient(1200px 700px at 18% -10%, rgba(168,85,247,0.22), transparent 55%), radial-gradient(900px 500px at 88% 0%, rgba(236,72,153,0.16), transparent 55%), radial-gradient(1000px 650px at 50% 110%, rgba(59,130,246,0.10), transparent 60%)" } : undefined}>
       {/* Ambient background */}
       <div className="aurora" aria-hidden="true" />
       <div className="noise" aria-hidden="true" />
@@ -822,9 +841,169 @@ export default function App() {
           </div>
         </header>
 
-        <div className={clsx("body", leftHidden && "bodyFull")}>
+        {isPrebook && !leftHidden && (
+          <section
+            className="card glass"
+            style={{
+              marginTop: 14,
+              marginBottom: 14,
+              border: `1px solid ${theme.accentBorder}`,
+              background: theme.panelBg,
+              boxShadow: "0 18px 50px rgba(0,0,0,0.35)",
+            }}
+          >
+            <div
+              style={{
+                display: "flex",
+                gap: 12,
+                alignItems: "center",
+                justifyContent: "space-between",
+                flexWrap: "wrap",
+              }}
+            >
+              <div style={{ display: "flex", gap: 14, alignItems: "center", flexWrap: "wrap" }}>
+                <div>
+                  <div className="mutedSmall">Daily limit</div>
+                  <div className="mono" style={{ fontSize: 16 }}>{quota.limit}</div>
+                </div>
+                <div>
+                  <div className="mutedSmall">Generated today</div>
+                  <div className="mono" style={{ fontSize: 16 }}>{quota.used}</div>
+                </div>
+                <div>
+                  <div className="mutedSmall">Remaining</div>
+                  <div className="mono" style={{ fontSize: 16 }}>{quota.remaining}</div>
+                </div>
+                {quota.remaining <= 0 ? (
+                  <span
+                    style={{
+                      padding: "6px 10px",
+                      borderRadius: 999,
+                      border: "1px solid rgba(255,255,255,0.20)",
+                      background: "rgba(255,255,255,0.06)",
+                      fontSize: 12,
+                    }}
+                  >
+                    Limit reached
+                  </span>
+                ) : null}
+              </div>
+
+              <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+                <button className="linkBtn" onClick={loadQuota} type="button">
+                  {quotaLoading ? "Refreshing…" : "Refresh quota"}
+                </button>
+                <button className="linkBtn" onClick={() => setPrebookQuestions(DEFAULT_QUESTIONS)} type="button">
+                  Reset questions
+                </button>
+                <button
+                  className="primaryBtn"
+                  type="button"
+                  disabled={prebookLoading || quota.remaining <= 0}
+                  onClick={generatePrebook}
+                  style={{
+                    background: theme.accentSoft,
+                    border: `1px solid ${theme.accentBorder}`,
+                    color: "rgba(255,255,255,0.92)",
+                  }}
+                  title={quota.remaining <= 0 ? "Daily limit reached" : "Generate a Pre-book report"}
+                >
+                  {prebookLoading ? "Generating…" : "Generate (Pre-book)"}
+                </button>
+              </div>
+            </div>
+
+            {quotaError ? (
+              <div className="mutedSmall" style={{ marginTop: 10 }}>
+                {quotaError}
+              </div>
+            ) : null}
+
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: "minmax(260px, 1.1fr) minmax(320px, 2fr)",
+                gap: 14,
+                marginTop: 14,
+                alignItems: "start",
+              }}
+            >
+              <div>
+                <label className="label">Topic</label>
+                <input
+                  className="input"
+                  value={prebookTopic}
+                  onChange={(e) => setPrebookTopic(e.target.value)}
+                  placeholder="e.g., Indian EV charging market 2026"
+                  style={{
+                    borderColor: theme.accentBorder,
+                  }}
+                />
+
+                <div className="quickChips" style={{ marginTop: 10 }}>
+                  {QUICK_TOPICS.map((t) => (
+                    <button
+                      key={t}
+                      className="chipPill"
+                      onClick={() => setPrebookTopic(t)}
+                      type="button"
+                      title="Use this topic"
+                      style={{
+                        borderColor: theme.accentBorder,
+                        background: "rgba(255,255,255,0.06)",
+                      }}
+                    >
+                      {t}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div>
+                <div
+                  style={{
+                    display: "flex",
+                    alignItems: "baseline",
+                    justifyContent: "space-between",
+                    gap: 10,
+                    flexWrap: "wrap",
+                  }}
+                >
+                  <label className="label" style={{ margin: 0 }}>
+                    Questions
+                  </label>
+                  <span className="mutedSmall">Edit these — they go into the report prompt</span>
+                </div>
+
+                <div
+                  style={{
+                    display: "grid",
+                    gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))",
+                    gap: 12,
+                    marginTop: 8,
+                  }}
+                >
+                  {prebookQuestions.map((q, i) => (
+                    <div key={i} className="qBlock" style={{ margin: 0 }}>
+                      <label className="label">Q{i + 1}</label>
+                      <textarea
+                        className="textarea"
+                        value={q}
+                        onChange={(e) => updatePrebookQuestion(i, e.target.value)}
+                        rows={2}
+                        style={{ borderColor: "rgba(255,255,255,0.16)" }}
+                      />
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          </section>
+        )}
+
+        <div className={clsx("body", (leftHidden || isPrebook) && "bodyFull")}>
           {/* LEFT */}
-          {!leftHidden && (
+          {!leftHidden && !isPrebook && (
             <aside className="left">
               <div className="panelScroll">
                 {activeTab === "instant" ? (
