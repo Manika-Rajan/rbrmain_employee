@@ -738,7 +738,7 @@ export default function App() {
       style={{
         minHeight: "100vh",
         height: "auto",
-        overflowX: "clip",
+        overflowX: "hidden",
         //overflowY: "auto",
         backgroundColor: isPrebook ? "rgb(10, 8, 18)" : "rgb(8, 12, 20)",
         backgroundImage: isPrebook
