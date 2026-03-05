@@ -43,6 +43,88 @@ function saveHistory(items) {
 
 const PREBOOK_STORAGE_KEY = "rbr_prebook_lab_history_v1";
 
+// Pre-book Templates (shared only for Pre-book work desk)
+const PREBOOK_TEMPLATES_KEY = "rbr_prebook_templates_v1";
+const PREBOOK_ACTIVE_TEMPLATE_KEY = "rbr_prebook_active_template_id_v1";
+
+const CHART_TYPES = [
+  "none",
+  "line",
+  "bar",
+  "stacked_bar",
+  "pie",
+  "donut",
+  "area",
+  "scatter",
+  "heatmap",
+];
+
+function loadPrebookTemplates() {
+  try {
+    const raw = localStorage.getItem(PREBOOK_TEMPLATES_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function savePrebookTemplates(items) {
+  try {
+    localStorage.setItem(PREBOOK_TEMPLATES_KEY, JSON.stringify(items));
+  } catch {}
+}
+
+function loadActivePrebookTemplateId() {
+  try {
+    return localStorage.getItem(PREBOOK_ACTIVE_TEMPLATE_KEY) || "";
+  } catch {
+    return "";
+  }
+}
+
+function saveActivePrebookTemplateId(id) {
+  try {
+    localStorage.setItem(PREBOOK_ACTIVE_TEMPLATE_KEY, id || "");
+  } catch {}
+}
+
+function makeTemplateId() {
+  return "tmpl_" + Math.random().toString(16).slice(2, 10);
+}
+
+function makeEmptyTemplate() {
+  const now = new Date().toISOString();
+  return {
+    id: makeTemplateId(),
+    name: "",
+    targetAudience: "",
+    description: "",
+    version: 1,
+    createdAt: now,
+    updatedAt: now,
+    layout: [
+      {
+        pageTitle: "Executive Summary",
+        sections: [
+          {
+            heading: "Market Snapshot",
+            subsections: [
+              {
+                title: "Key trends",
+                chart: { type: "line", notes: "" },
+                table: { columns: ["Metric", "Value"], rowLimit: 12 },
+                bodyNotes: "",
+              },
+            ],
+          },
+        ],
+      },
+    ],
+  };
+}
+
 function loadPrebookHistory() {
   try {
     const raw = localStorage.getItem(PREBOOK_STORAGE_KEY);
@@ -148,6 +230,104 @@ export default function App() {
   // Pre-book inputs (kept separate from Instant to avoid overwriting)
   const [prebookTopic, setPrebookTopic] = useState("FMCG market report India");
   const [prebookQuestions, setPrebookQuestions] = useState(DEFAULT_QUESTIONS);
+
+
+  // Pre-book templates (Instant uses standard template only)
+  const [prebookTemplates, setPrebookTemplates] = useState(() => loadPrebookTemplates());
+  const [activePrebookTemplateId, setActivePrebookTemplateId] = useState(() =>
+    loadActivePrebookTemplateId()
+  );
+
+  const activePrebookTemplate = useMemo(() => {
+    return prebookTemplates.find((t) => t.id === activePrebookTemplateId) || null;
+  }, [prebookTemplates, activePrebookTemplateId]);
+
+  // Template builder modal
+  const [tplModalOpen, setTplModalOpen] = useState(false);
+  const [tplMode, setTplMode] = useState("edit"); // "new" | "edit" | "saveas"
+  const [tplDraft, setTplDraft] = useState(null);
+
+  function deepClone(obj) {
+    try {
+      return JSON.parse(JSON.stringify(obj));
+    } catch {
+      return obj;
+    }
+  }
+
+  function openNewTemplate() {
+    setTplMode("new");
+    setTplDraft(makeEmptyTemplate());
+    setTplModalOpen(true);
+  }
+
+  function openEditTemplate() {
+    if (!activePrebookTemplate) return openNewTemplate();
+    setTplMode("edit");
+    setTplDraft(deepClone(activePrebookTemplate));
+    setTplModalOpen(true);
+  }
+
+  function openSaveAsTemplate() {
+    const base = activePrebookTemplate ? deepClone(activePrebookTemplate) : makeEmptyTemplate();
+    base.id = makeTemplateId();
+    base.createdAt = nowIso();
+    base.updatedAt = nowIso();
+    base.version = 1;
+    base.name = base.name ? base.name + " (copy)" : "";
+    setTplMode("saveas");
+    setTplDraft(base);
+    setTplModalOpen(true);
+  }
+
+  function persistTemplates(list, activeId) {
+    const next = Array.isArray(list) ? list : [];
+    setPrebookTemplates(next);
+    savePrebookTemplates(next);
+    const id = activeId || "";
+    setActivePrebookTemplateId(id);
+    saveActivePrebookTemplateId(id);
+  }
+
+  function deleteActiveTemplate() {
+    if (!activePrebookTemplateId) return;
+    const next = prebookTemplates.filter((t) => t.id !== activePrebookTemplateId);
+    const nextActive = next[0]?.id || "";
+    persistTemplates(next, nextActive);
+    setToast("Template deleted");
+  }
+
+  function saveTemplateDraft() {
+    if (!tplDraft) return;
+    const name = (tplDraft.name || "").trim();
+    if (!name) {
+      setToast("Template name required");
+      return;
+    }
+
+    const now = new Date().toISOString();
+    const nextTpl = { ...tplDraft, name, updatedAt: now };
+
+    const list = loadPrebookTemplates(); // source of truth
+    const idx = list.findIndex((t) => t.id === nextTpl.id);
+
+    const finalTpl =
+      idx >= 0
+        ? { ...list[idx], ...nextTpl }
+        : { ...nextTpl, createdAt: nextTpl.createdAt || now };
+
+    const nextList = idx >= 0 ? list.map((t) => (t.id === finalTpl.id ? finalTpl : t)) : [finalTpl, ...list];
+
+    persistTemplates(nextList.slice(0, 200), finalTpl.id);
+    setTplModalOpen(false);
+    setToast("Template saved ✅");
+  }
+
+  function selectTemplate(id) {
+    const tid = id || "";
+    setActivePrebookTemplateId(tid);
+    saveActivePrebookTemplateId(tid);
+  }
 
   // Pre-book quota display
   const [quota, setQuota] = useState({ limit: 0, used: 0, remaining: 0 });
@@ -494,6 +674,10 @@ export default function App() {
         employeeId: "10000001",
         query: t,
         questions: qs,
+        // Pre-book template (Instant uses standard template)
+        templateId: activePrebookTemplate?.id || "",
+        templateName: activePrebookTemplate?.name || "",
+        template: activePrebookTemplate || null,
       };
 
       setModalOpen(true);
@@ -611,6 +795,10 @@ export default function App() {
         employeeId: "10000001",
         query: t,
         questions: qs,
+        // Pre-book template (Instant uses standard template)
+        templateId: activePrebookTemplate?.id || "",
+        templateName: activePrebookTemplate?.name || "",
+        template: activePrebookTemplate || null,
       };
 
       // Create an optimistic history item immediately
@@ -620,6 +808,8 @@ export default function App() {
         createdAt: nowIso(),
         topic: t,
         title: t,
+        templateId: activePrebookTemplate?.id || "",
+        templateName: activePrebookTemplate?.name || "",
         reportId: "",
         status: "running",
         pdfUrl: "",
@@ -777,6 +967,399 @@ export default function App() {
             </div>
           </div>
         </div>
+      {/* Template Builder Modal (Pre-book only) */}
+      {tplModalOpen ? (
+        <div className="modalOverlay" onMouseDown={() => setTplModalOpen(false)}>
+          <div
+            className="modalCard"
+            style={{
+              maxWidth: 980,
+              width: "min(980px, 96vw)",
+              maxHeight: "86vh",
+              overflow: "hidden",
+              padding: 0,
+            }}
+            onMouseDown={(e) => e.stopPropagation()}
+          >
+            <div
+              style={{
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "center",
+                padding: "16px 18px",
+                borderBottom: "1px solid rgba(255,255,255,0.12)",
+                background: "rgba(0,0,0,0.18)",
+              }}
+            >
+              <div>
+                <div className="modalTitle" style={{ margin: 0 }}>
+                  {tplMode === "new" ? "New Template" : tplMode === "saveas" ? "Save Template As" : "Edit Template"}
+                </div>
+                <div className="modalSub" style={{ marginTop: 4 }}>
+                  Define headings, sub-headings, chart type, notes, and table columns for each segment.
+                </div>
+              </div>
+
+              <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+                <button className="btnSecondary" type="button" onClick={() => setTplModalOpen(false)}>
+                  Close
+                </button>
+                <button
+                  className="primaryBtn"
+                  type="button"
+                  onClick={saveTemplateDraft}
+                  style={{
+                    background: theme.accentSoft,
+                    border: `1px solid ${theme.accentBorder}`,
+                    color: "rgba(255,255,255,0.92)",
+                  }}
+                >
+                  Save template
+                </button>
+              </div>
+            </div>
+
+            <div style={{ overflow: "auto", maxHeight: "calc(86vh - 72px)", padding: 18 }}>
+              {!tplDraft ? (
+                <div className="mutedSmall">No template loaded.</div>
+              ) : (
+                <>
+                  <div
+                    className="card glass"
+                    style={{
+                      border: `1px solid ${theme.accentBorder}`,
+                      background: theme.panelBg,
+                      padding: 14,
+                      marginBottom: 14,
+                    }}
+                  >
+                    <div style={{ display: "grid", gridTemplateColumns: "1.2fr 1fr", gap: 12 }}>
+                      <div>
+                        <label className="label">Template name</label>
+                        <input
+                          className="input"
+                          value={tplDraft.name || ""}
+                          onChange={(e) => setTplDraft((p) => ({ ...p, name: e.target.value }))}
+                          placeholder='e.g., "Accounting template"'
+                          style={{ borderColor: theme.accentBorder }}
+                        />
+                      </div>
+                      <div>
+                        <label className="label">Target audience</label>
+                        <input
+                          className="input"
+                          value={tplDraft.targetAudience || ""}
+                          onChange={(e) => setTplDraft((p) => ({ ...p, targetAudience: e.target.value }))}
+                          placeholder='e.g., "Sales team"'
+                          style={{ borderColor: theme.accentBorder }}
+                        />
+                      </div>
+                    </div>
+
+                    <div style={{ marginTop: 12 }}>
+                      <label className="label">Description (optional)</label>
+                      <textarea
+                        className="textarea"
+                        rows={2}
+                        value={tplDraft.description || ""}
+                        onChange={(e) => setTplDraft((p) => ({ ...p, description: e.target.value }))}
+                        style={{ borderColor: "rgba(255,255,255,0.16)" }}
+                        placeholder="What this template is optimized for…"
+                      />
+                    </div>
+                  </div>
+
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+                    <div className="mono" style={{ opacity: 0.88 }}>
+                      Pages: {tplDraft.layout?.length || 0}
+                    </div>
+                    <button
+                      className="btnSecondary"
+                      type="button"
+                      onClick={() =>
+                        setTplDraft((p) => ({
+                          ...p,
+                          layout: [
+                            ...(p.layout || []),
+                            { pageTitle: "New Page", sections: [{ heading: "New Section", subsections: [] }] },
+                          ],
+                        }))
+                      }
+                    >
+                      + Add page
+                    </button>
+                  </div>
+
+                  <div style={{ marginTop: 12, display: "grid", gap: 12 }}>
+                    {(tplDraft.layout || []).map((page, pi) => (
+                      <div
+                        key={pi}
+                        className="card glass"
+                        style={{
+                          border: `1px solid rgba(255,255,255,0.14)`,
+                          background: "rgba(255,255,255,0.04)",
+                          padding: 14,
+                        }}
+                      >
+                        <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+                          <div style={{ flex: 1, minWidth: 260 }}>
+                            <label className="label">Page title</label>
+                            <input
+                              className="input"
+                              value={page.pageTitle || ""}
+                              onChange={(e) =>
+                                setTplDraft((p) => {
+                                  const next = deepClone(p);
+                                  next.layout[pi].pageTitle = e.target.value;
+                                  return next;
+                                })
+                              }
+                              style={{ borderColor: theme.accentBorder }}
+                            />
+                          </div>
+                          <button
+                            className="linkBtn"
+                            type="button"
+                            onClick={() =>
+                              setTplDraft((p) => {
+                                const next = deepClone(p);
+                                next.layout.splice(pi, 1);
+                                return next;
+                              })
+                            }
+                          >
+                            Remove page
+                          </button>
+                          <button
+                            className="btnSecondary"
+                            type="button"
+                            onClick={() =>
+                              setTplDraft((p) => {
+                                const next = deepClone(p);
+                                next.layout[pi].sections = [
+                                  ...(next.layout[pi].sections || []),
+                                  { heading: "New Section", subsections: [] },
+                                ];
+                                return next;
+                              })
+                            }
+                          >
+                            + Add section
+                          </button>
+                        </div>
+
+                        <div style={{ marginTop: 12, display: "grid", gap: 12 }}>
+                          {(page.sections || []).map((sec, si) => (
+                            <div
+                              key={si}
+                              style={{
+                                border: "1px solid rgba(255,255,255,0.12)",
+                                borderRadius: 14,
+                                padding: 12,
+                                background: "rgba(0,0,0,0.12)",
+                              }}
+                            >
+                              <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+                                <div style={{ flex: 1, minWidth: 260 }}>
+                                  <label className="label">Section heading</label>
+                                  <input
+                                    className="input"
+                                    value={sec.heading || ""}
+                                    onChange={(e) =>
+                                      setTplDraft((p) => {
+                                        const next = deepClone(p);
+                                        next.layout[pi].sections[si].heading = e.target.value;
+                                        return next;
+                                      })
+                                    }
+                                    style={{ borderColor: "rgba(255,255,255,0.18)" }}
+                                  />
+                                </div>
+                                <button
+                                  className="linkBtn"
+                                  type="button"
+                                  onClick={() =>
+                                    setTplDraft((p) => {
+                                      const next = deepClone(p);
+                                      next.layout[pi].sections.splice(si, 1);
+                                      return next;
+                                    })
+                                  }
+                                >
+                                  Remove section
+                                </button>
+                                <button
+                                  className="btnSecondary"
+                                  type="button"
+                                  onClick={() =>
+                                    setTplDraft((p) => {
+                                      const next = deepClone(p);
+                                      const subsections = next.layout[pi].sections[si].subsections || [];
+                                      subsections.push({
+                                        title: "New Subheading",
+                                        chart: { type: "none", notes: "" },
+                                        table: { columns: [], rowLimit: 12 },
+                                        bodyNotes: "",
+                                      });
+                                      next.layout[pi].sections[si].subsections = subsections;
+                                      return next;
+                                    })
+                                  }
+                                >
+                                  + Add subheading
+                                </button>
+                              </div>
+
+                              <div style={{ marginTop: 12, display: "grid", gap: 12 }}>
+                                {(sec.subsections || []).map((sub, xi) => (
+                                  <div
+                                    key={xi}
+                                    style={{
+                                      border: "1px solid rgba(255,255,255,0.10)",
+                                      borderRadius: 14,
+                                      padding: 12,
+                                      background: "rgba(255,255,255,0.03)",
+                                    }}
+                                  >
+                                    <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+                                      <div style={{ flex: 1, minWidth: 240 }}>
+                                        <label className="label">Subheading title</label>
+                                        <input
+                                          className="input"
+                                          value={sub.title || ""}
+                                          onChange={(e) =>
+                                            setTplDraft((p) => {
+                                              const next = deepClone(p);
+                                              next.layout[pi].sections[si].subsections[xi].title = e.target.value;
+                                              return next;
+                                            })
+                                          }
+                                          style={{ borderColor: "rgba(255,255,255,0.18)" }}
+                                        />
+                                      </div>
+
+                                      <div style={{ minWidth: 220 }}>
+                                        <label className="label">Chart type</label>
+                                        <select
+                                          className="input"
+                                          value={sub?.chart?.type || "none"}
+                                          onChange={(e) =>
+                                            setTplDraft((p) => {
+                                              const next = deepClone(p);
+                                              const cur = next.layout[pi].sections[si].subsections[xi];
+                                              cur.chart = cur.chart || { type: "none", notes: "" };
+                                              cur.chart.type = e.target.value;
+                                              return next;
+                                            })
+                                          }
+                                          style={{
+                                            paddingTop: 10,
+                                            paddingBottom: 10,
+                                            borderColor: "rgba(255,255,255,0.18)",
+                                            background: "rgba(0,0,0,0.18)",
+                                          }}
+                                        >
+                                          {CHART_TYPES.map((ct) => (
+                                            <option key={ct} value={ct}>
+                                              {ct}
+                                            </option>
+                                          ))}
+                                        </select>
+                                      </div>
+
+                                      <button
+                                        className="linkBtn"
+                                        type="button"
+                                        onClick={() =>
+                                          setTplDraft((p) => {
+                                            const next = deepClone(p);
+                                            next.layout[pi].sections[si].subsections.splice(xi, 1);
+                                            return next;
+                                          })
+                                        }
+                                      >
+                                        Remove
+                                      </button>
+                                    </div>
+
+                                    <div style={{ display: "grid", gridTemplateColumns: "1.2fr 1fr", gap: 12, marginTop: 10 }}>
+                                      <div>
+                                        <label className="label">Chart notes (optional)</label>
+                                        <textarea
+                                          className="textarea"
+                                          rows={2}
+                                          value={sub?.chart?.notes || ""}
+                                          onChange={(e) =>
+                                            setTplDraft((p) => {
+                                              const next = deepClone(p);
+                                              const cur = next.layout[pi].sections[si].subsections[xi];
+                                              cur.chart = cur.chart || { type: "none", notes: "" };
+                                              cur.chart.notes = e.target.value;
+                                              return next;
+                                            })
+                                          }
+                                          style={{ borderColor: "rgba(255,255,255,0.14)" }}
+                                          placeholder="e.g., show YoY and MoM highlights"
+                                        />
+                                      </div>
+
+                                      <div>
+                                        <label className="label">Table columns (comma separated)</label>
+                                        <textarea
+                                          className="textarea"
+                                          rows={2}
+                                          value={(sub?.table?.columns || []).join(", ")}
+                                          onChange={(e) =>
+                                            setTplDraft((p) => {
+                                              const next = deepClone(p);
+                                              const cur = next.layout[pi].sections[si].subsections[xi];
+                                              cur.table = cur.table || { columns: [], rowLimit: 12 };
+                                              cur.table.columns = e.target.value
+                                                .split(",")
+                                                .map((s) => s.trim())
+                                                .filter(Boolean);
+                                              return next;
+                                            })
+                                          }
+                                          style={{ borderColor: "rgba(255,255,255,0.14)" }}
+                                          placeholder="e.g., Month, Revenue, YoY%, MoM%"
+                                        />
+                                      </div>
+                                    </div>
+
+                                    <div style={{ marginTop: 10 }}>
+                                      <label className="label">Body notes (optional)</label>
+                                      <textarea
+                                        className="textarea"
+                                        rows={2}
+                                        value={sub.bodyNotes || ""}
+                                        onChange={(e) =>
+                                          setTplDraft((p) => {
+                                            const next = deepClone(p);
+                                            next.layout[pi].sections[si].subsections[xi].bodyNotes = e.target.value;
+                                            return next;
+                                          })
+                                        }
+                                        style={{ borderColor: "rgba(255,255,255,0.14)" }}
+                                        placeholder="What should this subheading cover?"
+                                      />
+                                    </div>
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </>
+              )}
+            </div>
+          </div>
+        </div>
+      ) : null}
+
       ) : null}
 
       {/* SHELL fixes cropping: header + body with internal scroll */}
@@ -925,6 +1508,52 @@ export default function App() {
                 <button className="linkBtn" onClick={() => setPrebookQuestions(DEFAULT_QUESTIONS)} type="button">
                   Reset questions
                 </button>
+                <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 4, minWidth: 220 }}>
+                    <div className="mutedSmall">Template</div>
+                    <select
+                      className="input"
+                      value={activePrebookTemplateId || ""}
+                      onChange={(e) => selectTemplate(e.target.value)}
+                      style={{
+                        paddingTop: 10,
+                        paddingBottom: 10,
+                        borderColor: theme.accentBorder,
+                        background: "rgba(255,255,255,0.06)",
+                      }}
+                      title="Choose a Pre-book report template"
+                    >
+                      <option value="">Standard (default)</option>
+                      {prebookTemplates.map((t) => (
+                        <option key={t.id} value={t.id}>
+                          {t.name || "(unnamed template)"}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 18, flexWrap: "wrap" }}>
+                    <button className="linkBtn" type="button" onClick={openNewTemplate}>
+                      New
+                    </button>
+                    <button className="linkBtn" type="button" onClick={openEditTemplate}>
+                      Edit
+                    </button>
+                    <button className="linkBtn" type="button" onClick={openSaveAsTemplate}>
+                      Save as
+                    </button>
+                    <button
+                      className="linkBtn"
+                      type="button"
+                      onClick={deleteActiveTemplate}
+                      disabled={!activePrebookTemplateId}
+                      title={!activePrebookTemplateId ? "Select a saved template to delete" : "Delete selected template"}
+                    >
+                      Delete
+                    </button>
+                  </div>
+                </div>
+
                 <button
                   className="primaryBtn"
                   type="button"
