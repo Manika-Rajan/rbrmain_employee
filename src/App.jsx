@@ -739,7 +739,7 @@ export default function App() {
         minHeight: "100vh",
         height: "auto",
         overflowX: "clip",
-        overflowY: "auto",
+        //overflowY: "auto",
         backgroundColor: isPrebook ? "rgb(10, 8, 18)" : "rgb(8, 12, 20)",
         backgroundImage: isPrebook
           ? "radial-gradient(1200px 700px at 18% -10%, rgba(168,85,247,0.26), transparent 55%), radial-gradient(900px 500px at 88% 0%, rgba(236,72,153,0.20), transparent 55%), radial-gradient(1000px 650px at 50% 110%, rgba(59,130,246,0.12), transparent 60%)"
