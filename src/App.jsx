@@ -967,6 +967,8 @@ export default function App() {
             </div>
           </div>
         </div>
+      ) : null}
+
       {/* Template Builder Modal (Pre-book only) */}
       {tplModalOpen ? (
         <div className="modalOverlay" onMouseDown={() => setTplModalOpen(false)}>
