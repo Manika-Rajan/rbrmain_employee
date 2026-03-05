@@ -247,6 +247,75 @@ export default function App() {
   const [tplMode, setTplMode] = useState("edit"); // "new" | "edit" | "saveas"
   const [tplDraft, setTplDraft] = useState(null);
 
+  const [tplShowPreview, setTplShowPreview] = useState(true);
+  const tplImportInputRef = useRef(null);
+
+  function moveArrayItem(arr, from, to) {
+    const a = Array.isArray(arr) ? [...arr] : [];
+    if (from < 0 || from >= a.length) return a;
+    const t = Math.max(0, Math.min(a.length - 1, to));
+    if (t === from) return a;
+    const [item] = a.splice(from, 1);
+    a.splice(t, 0, item);
+    return a;
+  }
+
+  function exportPrebookTemplates() {
+    try {
+      const payload = {
+        exportVersion: 1,
+        exportedAt: nowIso(),
+        templates: loadPrebookTemplates(),
+      };
+      const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `rbr_prebook_templates_${new Date().toISOString().slice(0, 10)}.json`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+      setToast("Templates exported ✅");
+    } catch {
+      setToast("Export failed");
+    }
+  }
+
+  async function importPrebookTemplatesFromFile(file) {
+    try {
+      const text = await file.text();
+      const parsed = JSON.parse(text);
+      const imported = Array.isArray(parsed) ? parsed : parsed?.templates;
+      if (!Array.isArray(imported)) {
+        setToast("Invalid template file");
+        return;
+      }
+      // Basic sanitize + cap
+      const next = imported
+        .filter((t) => t && typeof t === "object" && typeof t.id === "string")
+        .slice(0, 200)
+        .map((t) => ({
+          ...t,
+          updatedAt: t.updatedAt || nowIso(),
+          createdAt: t.createdAt || nowIso(),
+          version: Number.isFinite(t.version) ? t.version : 1,
+          layout: Array.isArray(t.layout) ? t.layout : [],
+        }));
+      persistTemplates(next, next[0]?.id || "");
+      setToast(`Imported ${next.length} template(s) ✅`);
+    } catch (e) {
+      setToast("Import failed");
+    } finally {
+      if (tplImportInputRef.current) tplImportInputRef.current.value = "";
+    }
+  }
+
+  function triggerImportTemplates() {
+    tplImportInputRef.current?.click();
+  }
+
+
   function deepClone(obj) {
     try {
       return JSON.parse(JSON.stringify(obj));
@@ -1006,6 +1075,9 @@ export default function App() {
                 <button className="btnSecondary" type="button" onClick={() => setTplModalOpen(false)}>
                   Close
                 </button>
+                <button className="btnSecondary" type="button" onClick={() => setTplShowPreview((v) => !v)}>
+                  {tplShowPreview ? "Hide preview" : "Show preview"}
+                </button>
                 <button
                   className="primaryBtn"
                   type="button"
@@ -1068,7 +1140,74 @@ export default function App() {
                         style={{ borderColor: "rgba(255,255,255,0.16)" }}
                         placeholder="What this template is optimized for…"
                       />
+                    
+                  {tplShowPreview ? (
+                    <div
+                      className="card glass"
+                      style={{
+                        border: "1px solid rgba(255,255,255,0.12)",
+                        background: "rgba(0,0,0,0.10)",
+                        padding: 14,
+                        marginBottom: 14,
+                      }}
+                    >
+                      <div className="mono" style={{ fontSize: 13, opacity: 0.9, marginBottom: 8 }}>
+                        Template preview (outline)
+                      </div>
+
+                      <div style={{ display: "grid", gap: 8 }}>
+                        {(tplDraft.layout || []).map((pge, pi2) => (
+                          <div key={pi2} style={{ border: "1px dashed rgba(255,255,255,0.12)", borderRadius: 12, padding: 10 }}>
+                            <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "baseline" }}>
+                              <div style={{ fontWeight: 700 }}>{pi2 + 1}. {pge.pageTitle || "Untitled page"}</div>
+                              <div className="mutedSmall" style={{ opacity: 0.75 }}>
+                                {(pge.sections || []).length} section(s)
+                              </div>
+                            </div>
+
+                            <div style={{ marginTop: 8, display: "grid", gap: 8 }}>
+                              {(pge.sections || []).map((sec2, si2) => (
+                                <div key={si2} style={{ paddingLeft: 10 }}>
+                                  <div style={{ fontWeight: 650 }}>
+                                    {pi2 + 1}.{si2 + 1} {sec2.heading || "Untitled section"}
+                                  </div>
+                                  <div style={{ marginTop: 6, display: "grid", gap: 6 }}>
+                                    {(sec2.subsections || []).map((sub2, xi2) => (
+                                      <div key={xi2} style={{ paddingLeft: 12, opacity: 0.95 }}>
+                                        <span className="mono" style={{ fontSize: 12, opacity: 0.85 }}>
+                                          {pi2 + 1}.{si2 + 1}.{xi2 + 1}
+                                        </span>{" "}
+                                        {sub2.title || "Untitled subheading"}{" "}
+                                        <span className="mutedSmall" style={{ opacity: 0.75 }}>
+                                          — {sub2?.chart?.type || "none"} • rows {sub2?.table?.rowLimit || 12} • cols {(sub2?.table?.columns || []).length}
+                                        </span>
+                                      </div>
+                                    ))}
+                                    {(sec2.subsections || []).length === 0 ? (
+                                      <div className="mutedSmall" style={{ paddingLeft: 12, opacity: 0.75 }}>
+                                        No subheadings yet
+                                      </div>
+                                    ) : null}
+                                  </div>
+                                </div>
+                              ))}
+                              {(pge.sections || []).length === 0 ? (
+                                <div className="mutedSmall" style={{ paddingLeft: 10, opacity: 0.75 }}>
+                                  No sections yet
+                                </div>
+                              ) : null}
+                            </div>
+                          </div>
+                        ))}
+
+                        {(tplDraft.layout || []).length === 0 ? (
+                          <div className="mutedSmall">No pages yet.</div>
+                        ) : null}
+                      </div>
                     </div>
+                  ) : null}
+
+</div>
                   </div>
 
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
@@ -1133,6 +1272,36 @@ export default function App() {
                             Remove page
                           </button>
                           <button
+                            className="linkBtn"
+                            type="button"
+                            disabled={pi === 0}
+                            onClick={() =>
+                              setTplDraft((p) => {
+                                const next = deepClone(p);
+                                next.layout = moveArrayItem(next.layout || [], pi, pi - 1);
+                                return next;
+                              })
+                            }
+                            title="Move page up"
+                          >
+                            ↑
+                          </button>
+                          <button
+                            className="linkBtn"
+                            type="button"
+                            disabled={pi === (tplDraft.layout?.length || 0) - 1}
+                            onClick={() =>
+                              setTplDraft((p) => {
+                                const next = deepClone(p);
+                                next.layout = moveArrayItem(next.layout || [], pi, pi + 1);
+                                return next;
+                              })
+                            }
+                            title="Move page down"
+                          >
+                            ↓
+                          </button>
+                          <button
                             className="btnSecondary"
                             type="button"
                             onClick={() =>
@@ -1189,6 +1358,38 @@ export default function App() {
                                   }
                                 >
                                   Remove section
+                                </button>
+                                <button
+                                  className="linkBtn"
+                                  type="button"
+                                  disabled={si === 0}
+                                  onClick={() =>
+                                    setTplDraft((p) => {
+                                      const next = deepClone(p);
+                                      const secs = next.layout[pi].sections || [];
+                                      next.layout[pi].sections = moveArrayItem(secs, si, si - 1);
+                                      return next;
+                                    })
+                                  }
+                                  title="Move section up"
+                                >
+                                  ↑
+                                </button>
+                                <button
+                                  className="linkBtn"
+                                  type="button"
+                                  disabled={si === (page.sections?.length || 0) - 1}
+                                  onClick={() =>
+                                    setTplDraft((p) => {
+                                      const next = deepClone(p);
+                                      const secs = next.layout[pi].sections || [];
+                                      next.layout[pi].sections = moveArrayItem(secs, si, si + 1);
+                                      return next;
+                                    })
+                                  }
+                                  title="Move section down"
+                                >
+                                  ↓
                                 </button>
                                 <button
                                   className="btnSecondary"
@@ -1272,6 +1473,38 @@ export default function App() {
                                       <button
                                         className="linkBtn"
                                         type="button"
+                                        disabled={xi === 0}
+                                        onClick={() =>
+                                          setTplDraft((p) => {
+                                            const next = deepClone(p);
+                                            const subs = next.layout[pi].sections[si].subsections || [];
+                                            next.layout[pi].sections[si].subsections = moveArrayItem(subs, xi, xi - 1);
+                                            return next;
+                                          })
+                                        }
+                                        title="Move subheading up"
+                                      >
+                                        ↑
+                                      </button>
+                                      <button
+                                        className="linkBtn"
+                                        type="button"
+                                        disabled={xi === (sec.subsections?.length || 0) - 1}
+                                        onClick={() =>
+                                          setTplDraft((p) => {
+                                            const next = deepClone(p);
+                                            const subs = next.layout[pi].sections[si].subsections || [];
+                                            next.layout[pi].sections[si].subsections = moveArrayItem(subs, xi, xi + 1);
+                                            return next;
+                                          })
+                                        }
+                                        title="Move subheading down"
+                                      >
+                                        ↓
+                                      </button>
+                                      <button
+                                        className="linkBtn"
+                                        type="button"
                                         onClick={() =>
                                           setTplDraft((p) => {
                                             const next = deepClone(p);
@@ -1326,6 +1559,28 @@ export default function App() {
                                           style={{ borderColor: "rgba(255,255,255,0.14)" }}
                                           placeholder="e.g., Month, Revenue, YoY%, MoM%"
                                         />
+
+                                        <div style={{ display: "flex", gap: 10, alignItems: "center", marginTop: 10 }}>
+                                          <div className="mutedSmall" style={{ opacity: 0.85 }}>Row limit</div>
+                                          <input
+                                            className="input"
+                                            type="number"
+                                            min={1}
+                                            max={200}
+                                            value={Number(sub?.table?.rowLimit || 12)}
+                                            onChange={(e) =>
+                                              setTplDraft((p) => {
+                                                const next = deepClone(p);
+                                                const cur = next.layout[pi].sections[si].subsections[xi];
+                                                cur.table = cur.table || { columns: [], rowLimit: 12 };
+                                                const n = Number(e.target.value);
+                                                cur.table.rowLimit = Number.isFinite(n) && n > 0 ? n : 12;
+                                                return next;
+                                              })
+                                            }
+                                            style={{ width: 120, borderColor: "rgba(255,255,255,0.18)", background: "rgba(0,0,0,0.18)" }}
+                                          />
+                                        </div>
                                       </div>
                                     </div>
 
@@ -1361,6 +1616,7 @@ export default function App() {
           </div>
         </div>
       ) : null}
+
 
       {/* SHELL fixes cropping: header + body with internal scroll */}
       <div className={clsx("shell", isPrebook && "themePrebook")} style={{ width: "100%", maxWidth: "none", overflow: "visible" }}>
@@ -1551,7 +1807,24 @@ export default function App() {
                     >
                       Delete
                     </button>
-                  </div>
+                    <button className="linkBtn" type="button" onClick={exportPrebookTemplates} title="Export templates as JSON">
+                      Export
+                    </button>
+                    <button className="linkBtn" type="button" onClick={triggerImportTemplates} title="Import templates JSON">
+                      Import
+                    </button>
+                  
+                <input
+                  ref={tplImportInputRef}
+                  type="file"
+                  accept="application/json"
+                  style={{ display: "none" }}
+                  onChange={(e) => {
+                    const f = e.target.files && e.target.files[0];
+                    if (f) importPrebookTemplatesFromFile(f);
+                  }}
+                />
+</div>
                 </div>
 
                 <button
