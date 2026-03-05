@@ -1362,8 +1362,6 @@ export default function App() {
         </div>
       ) : null}
 
-      ) : null}
-
       {/* SHELL fixes cropping: header + body with internal scroll */}
       <div className={clsx("shell", isPrebook && "themePrebook")} style={{ width: "100%", maxWidth: "none", overflow: "visible" }}>
         <header className="topbar" ref={headerRef}
