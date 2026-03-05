@@ -14,12 +14,12 @@ const DEFAULT_QUESTIONS = [
 ];
 
 const QUICK_TOPICS = [
-  "FMCG market report India",
-  "EV charging market India",
-  "Restaurant business in India",
-  "Pharma competitor analysis India",
-  "IT industry analysis India",
-  "Paper industry in India",
+ // "FMCG market report India",
+ // "EV charging market India",
+ // "Restaurant business in India",
+ // "Pharma competitor analysis India",
+ // "IT industry analysis India",
+ // "Paper industry in India",
 ];
 
 const STORAGE_KEY = "rbr_instant_lab_history_v2";
