@@ -736,7 +736,7 @@ export default function App() {
   return (
     <div className={clsx("page", isPrebook && "themePrebook")} data-theme={isPrebook ? "prebook" : "instant"}
       style={{
-        minHeight: "100vh",
+        minHeight: "90vh",
         height: "auto",
         overflowX: "hidden",
         overflowY: "auto",
