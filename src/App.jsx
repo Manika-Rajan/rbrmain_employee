@@ -901,14 +901,57 @@ export default function App() {
 
     try {
       const payload = {
-        bypass: true,
-        employeeId: "10000001",
-        query: t,
-        questions: qs,
-        templateId: activePrebookTemplate?.id || "",
-        templateName: activePrebookTemplate?.name || "",
-        template: activePrebookTemplate || null,
-        brief: prebookBrief,
+        report: {
+          title: prebookTopic.trim() || "RBR Pre-book Report",
+          subtitle: `${prebookBrief.audience || "General audience"} • ${prebookBrief.geography || "India"} • ${prebookBrief.horizon || "3-5 years"}`,
+          sections: [
+            {
+              heading: "Objective & Scope",
+              subheadings: [
+                {
+                  title: "Report Objective",
+                  content: prebookBrief.objective || "No objective provided.",
+                  charts: [],
+                  tables: [],
+                },
+                {
+                  title: "Audience & Coverage",
+                  content: `Audience: ${prebookBrief.audience || "-"}\nGeography: ${prebookBrief.geography || "-"}\nTime Horizon: ${prebookBrief.horizon || "-"}\nDepth: ${prebookBrief.depth || "-"}\nTone: ${prebookBrief.tone || "-"}`,
+                  charts: [],
+                  tables: [],
+                },
+              ],
+            },
+            {
+              heading: "Research Questions",
+              subheadings: prebookQuestions
+                .filter((q) => q.trim())
+                .map((q, i) => ({
+                  title: `Question ${i + 1}`,
+                  content: q,
+                  charts: [],
+                  tables: [],
+                })),
+            },
+            {
+              heading: "Special Instructions",
+              subheadings: [
+                {
+                  title: "Must Include",
+                  content: prebookBrief.mustInclude || "No must-include instructions provided.",
+                  charts: [],
+                  tables: [],
+                },
+                {
+                  title: "Avoid / Special Notes",
+                  content: prebookBrief.avoidNotes || "No avoid notes provided.",
+                  charts: [],
+                  tables: [],
+                },
+              ],
+            },
+          ],
+        },
       };
 
       const historyId = `prebook-${Date.now()}`;
