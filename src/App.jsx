@@ -60,6 +60,14 @@ function loadHistory() {
   }
 }
 
+function ensurePrebookQuotaEnv() {
+  if (!PREBOOK_QUOTA_API) {
+    setError("Missing env var: VITE_PREBOOK_QUOTA_API. Add it in Amplify env vars and redeploy.");
+    return false;
+  }
+  return true;
+}
+
 function saveHistory(items) {
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(items));
@@ -523,7 +531,7 @@ export default function App() {
 
   async function loadQuota() {
     setQuotaError("");
-    if (!ensurePrebookEnv()) return;
+    if (!ensurePrebookQuotaEnv()) return;
 
     setQuotaLoading(true);
     try {
