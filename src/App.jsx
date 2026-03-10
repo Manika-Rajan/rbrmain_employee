@@ -989,10 +989,7 @@ export default function App() {
       const presignedUrl =
         data.presignedUrl || data.presigned_url || data.url || data.presignedURL || "";
 
-      let pdfUrl = presignedUrl;
-      if (!pdfUrl && s3Key) {
-        pdfUrl = await getPresignedUrl({ s3Key, api: PREBOOK_PRESIGN_API });
-      }
+      const pdfUrl = presignedUrl || "";
 
       upsertPrebookItem(historyId, {
         title: data.title || t,
