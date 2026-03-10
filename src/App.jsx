@@ -60,14 +60,6 @@ function loadHistory() {
   }
 }
 
-function ensurePrebookQuotaEnv() {
-  if (!PREBOOK_QUOTA_API) {
-    setError("Missing env var: VITE_PREBOOK_QUOTA_API. Add it in Amplify env vars and redeploy.");
-    return false;
-  }
-  return true;
-}
-
 function saveHistory(items) {
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(items));
@@ -346,6 +338,15 @@ export default function App() {
   const [loading, setLoading] = useState(false);
   const [prebookLoading, setPrebookLoading] = useState(false);
   const [error, setError] = useState("");
+
+  function ensurePrebookQuotaEnv() {
+    if (!PREBOOK_QUOTA_API) {
+      setError("Missing env var: VITE_PREBOOK_QUOTA_API. Add it in Amplify env vars and redeploy.");
+      return false;
+    }
+    return true;
+  }
+  
   const [lastApiResponse, setLastApiResponse] = useState(null);
 
   const [history, setHistory] = useState(() => loadHistory());
