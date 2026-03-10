@@ -3,6 +3,7 @@ import "./App.css";
 
 const MAX_WAIT_MS = 120000;
 const POLL_EVERY_MS = 2500;
+const PREBOOK_QUOTA_API = import.meta.env.VITE_PREBOOK_QUOTA_API;
 
 const DEFAULT_QUESTIONS = [
   "What is the current market overview and market size, with recent trends?",
