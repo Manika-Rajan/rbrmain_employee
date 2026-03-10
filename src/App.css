@@ -468,3 +468,36 @@ body{
   background: linear-gradient(135deg, rgba(168,85,247,1), rgba(244,114,182,.88), rgba(34,211,238,.55));
   box-shadow: 0 12px 42px rgba(244,114,182,.20);
 }
+
+/* Fix dropdown readability */
+select,
+.input select {
+  background-color: rgba(20, 24, 35, 0.95);
+  color: #e8ecf1;
+  border: 1px solid rgba(255,255,255,0.15);
+}
+
+/* dropdown options */
+select option {
+  background-color: #1a1f2e;
+  color: #e8ecf1;
+}
+
+.input {
+  background-color: rgba(20, 24, 35, 0.9);
+  color: #e8ecf1;
+}
+
+.input option {
+  background-color: #1a1f2e;
+  color: #e8ecf1;
+}
+
+select {
+  appearance: none;
+  background-image: url("data:image/svg+xml;utf8,<svg fill='white' height='20' viewBox='0 0 20 20' width='20'><path d='M5 7l5 5 5-5z'/></svg>");
+  background-repeat: no-repeat;
+  background-position: right 10px center;
+  padding-right: 30px;
+}
+
