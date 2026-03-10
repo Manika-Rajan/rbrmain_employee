@@ -985,7 +985,7 @@ export default function App() {
       }
 
       const reportId = data.reportId || data.report_id || data.prebookId || data.id || "";
-      const s3Key = data.s3Key || data.s3_key || "";
+      const s3Key = data.s3Key || data.s3_key || data.pdfKey || data.pdf_key || "";
       const presignedUrl =
         data.presignedUrl || data.presigned_url || data.url || data.presignedURL || "";
 
