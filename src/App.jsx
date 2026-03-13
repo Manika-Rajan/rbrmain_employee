@@ -382,7 +382,8 @@ export default function App() {
   function toggleDateGroup(dateKey) {
     setExpandedDateGroups((prev) => ({
       ...prev,
-      [dateKey]: !(prev[dateKey] ?? true),
+      [dateKey]:
+        prev[dateKey] !== undefined ? !prev[dateKey] : true,
     }));
   }
   
@@ -409,6 +410,7 @@ export default function App() {
   const [statusFilter, setStatusFilter] = useState("all");
   const [toast, setToast] = useState("");
   const [showDebug, setShowDebug] = useState(false);
+  const [expandedDateGroups, setExpandedDateGroups] = useState({});
 
   const [modalOpen, setModalOpen] = useState(false);
   const [modalTitle, setModalTitle] = useState("Generating report…");
@@ -2811,8 +2813,11 @@ function GroupedHistoryTable({
 }) {
   return (
     <div style={{ display: "grid", gap: 12 }}>
-      {groupedHistory.map((group) => {
-        const isOpen = expandedDateGroups[group.dateKey] ?? true;
+      {groupedHistory.map((group, index) => {
+        const isOpen =
+          expandedDateGroups[group.dateKey] !== undefined
+            ? expandedDateGroups[group.dateKey]
+            : index === 0;
 
         return (
           <div
