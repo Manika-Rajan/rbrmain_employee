@@ -2824,8 +2824,8 @@ function GroupedHistoryTable({
             key={group.dateKey}
             className="card"
             style={{
-              border: "1px solid rgba(255,255,255,0.10)",
-              background: "rgba(255,255,255,0.03)",
+              border: "1px solid rgba(168,85,247,0.22)",
+              background: "rgba(168,85,247,0.04)",
               overflow: "hidden",
             }}
           >
@@ -2839,10 +2839,12 @@ function GroupedHistoryTable({
                 justifyContent: "space-between",
                 gap: 12,
                 padding: "14px 16px",
-                background: "rgba(255,255,255,0.04)",
+                background: isOpen
+                    ? "linear-gradient(180deg, rgba(168,85,247,0.22), rgba(168,85,247,0.12))"
+                    : "linear-gradient(180deg, rgba(168,85,247,0.14), rgba(168,85,247,0.08))",
                 border: "none",
-                borderBottom: isOpen ? "1px solid rgba(255,255,255,0.08)" : "none",
-                color: "rgba(255,255,255,0.95)",
+                borderBottom: isOpen ? "1px solid rgba(168,85,247,0.32)" : "none",
+                color: "rgba(255,255,255,0.96)",
                 cursor: "pointer",
                 textAlign: "left",
               }}
