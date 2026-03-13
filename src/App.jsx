@@ -495,9 +495,6 @@ export default function App() {
     [activeHistory, rightSelId]
   );
 
-  const groupedFilteredHistory = useMemo(() => {
-    return groupHistoryByDate(filteredHistory);
-  }, [filteredHistory]);
   
   const filteredHistory = useMemo(() => {
     const q = normalize(historyQuery);
@@ -515,6 +512,10 @@ export default function App() {
       return matchesQ && matchesStatus;
     });
   }, [activeHistory, historyQuery, statusFilter]);
+  
+  const groupedFilteredHistory = useMemo(() => {
+    return groupHistoryByDate(filteredHistory);
+  }, [filteredHistory]);
 
   const activeTemplateStats = useMemo(() => templateStats(activePrebookTemplate), [activePrebookTemplate]);
   const activeTemplateOutline = useMemo(() => outlinePreviewData(activePrebookTemplate), [activePrebookTemplate]);
