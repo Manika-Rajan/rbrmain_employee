@@ -282,6 +282,46 @@ function buildPrebookPromptTips({ topic, questions, brief, activeTemplate }) {
   return tips;
 }
 
+function formatDateGroupLabel(dateKey) {
+  if (!dateKey) return "Unknown date";
+  const d = new Date(`${dateKey}T00:00:00`);
+  if (Number.isNaN(d.getTime())) return dateKey;
+  return d.toLocaleDateString(undefined, {
+    year: "numeric",
+    month: "long",
+    day: "numeric",
+  });
+}
+
+function getDateKey(value) {
+  const d = value ? new Date(value) : null;
+  if (!d || Number.isNaN(d.getTime())) return "unknown-date";
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
+function groupHistoryByDate(items) {
+  const groupsMap = new Map();
+
+  [...(items || [])]
+    .sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0))
+    .forEach((item) => {
+      const dateKey = getDateKey(item.createdAt);
+      if (!groupsMap.has(dateKey)) {
+        groupsMap.set(dateKey, []);
+      }
+      groupsMap.get(dateKey).push(item);
+    });
+
+  return Array.from(groupsMap.entries()).map(([dateKey, items]) => ({
+    dateKey,
+    label: formatDateGroupLabel(dateKey),
+    items,
+  }));
+}
+
 export default function App() {
   const CONFIRM_API = import.meta.env.VITE_CONFIRM_API;
   const STATUS_API = import.meta.env.VITE_STATUS_API;
@@ -339,6 +379,13 @@ export default function App() {
   const [prebookLoading, setPrebookLoading] = useState(false);
   const [error, setError] = useState("");
 
+  function toggleDateGroup(dateKey) {
+    setExpandedDateGroups((prev) => ({
+      ...prev,
+      [dateKey]: !(prev[dateKey] ?? true),
+    }));
+  }
+  
   function ensurePrebookQuotaEnv() {
     if (!PREBOOK_QUOTA_API) {
       setError("Missing env var: VITE_PREBOOK_QUOTA_API. Add it in Amplify env vars and redeploy.");
@@ -448,6 +495,10 @@ export default function App() {
     [activeHistory, rightSelId]
   );
 
+  const groupedFilteredHistory = useMemo(() => {
+    return groupHistoryByDate(filteredHistory);
+  }, [filteredHistory]);
+  
   const filteredHistory = useMemo(() => {
     const q = normalize(historyQuery);
     const sf = normalize(statusFilter);
@@ -2615,6 +2666,17 @@ async function setRight(itemId) {
                     <div className="emptyTitle">No matching reports</div>
                     <div className="mutedSmall">Generate a report, or clear the search/filter.</div>
                   </div>
+                ) : activeTab === "prebook" ? (
+                  <GroupedHistoryTable
+                    activeTab={activeTab}
+                    groupedHistory={groupedFilteredHistory}
+                    expandedDateGroups={expandedDateGroups}
+                    toggleDateGroup={toggleDateGroup}
+                    copyToClipboard={copyToClipboard}
+                    removeItem={removeItem}
+                    setLeft={setLeft}
+                    setRight={setRight}
+                  />
                 ) : (
                   <HistoryTable
                     activeTab={activeTab}
@@ -2732,6 +2794,88 @@ function HistoryTable({ activeTab, filteredHistory, copyToClipboard, removeItem,
           })}
         </tbody>
       </table>
+    </div>
+  );
+}
+
+function GroupedHistoryTable({
+  activeTab,
+  groupedHistory,
+  expandedDateGroups,
+  toggleDateGroup,
+  copyToClipboard,
+  removeItem,
+  setLeft,
+  setRight,
+}) {
+  return (
+    <div style={{ display: "grid", gap: 12 }}>
+      {groupedHistory.map((group) => {
+        const isOpen = expandedDateGroups[group.dateKey] ?? true;
+
+        return (
+          <div
+            key={group.dateKey}
+            className="card"
+            style={{
+              border: "1px solid rgba(255,255,255,0.10)",
+              background: "rgba(255,255,255,0.03)",
+              overflow: "hidden",
+            }}
+          >
+            <button
+              type="button"
+              onClick={() => toggleDateGroup(group.dateKey)}
+              style={{
+                width: "100%",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                gap: 12,
+                padding: "14px 16px",
+                background: "rgba(255,255,255,0.04)",
+                border: "none",
+                borderBottom: isOpen ? "1px solid rgba(255,255,255,0.08)" : "none",
+                color: "rgba(255,255,255,0.95)",
+                cursor: "pointer",
+                textAlign: "left",
+              }}
+            >
+              <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                <div style={{ fontWeight: 700 }}>{group.label}</div>
+                <div className="mutedSmall">
+                  {group.items.length} report{group.items.length > 1 ? "s" : ""}
+                </div>
+              </div>
+
+              <div
+                style={{
+                  fontSize: 18,
+                  lineHeight: 1,
+                  opacity: 0.9,
+                  transform: isOpen ? "rotate(0deg)" : "rotate(-90deg)",
+                  transition: "transform 160ms ease",
+                }}
+              >
+                ▾
+              </div>
+            </button>
+
+            {isOpen ? (
+              <div style={{ padding: 12 }}>
+                <HistoryTable
+                  activeTab={activeTab}
+                  filteredHistory={group.items}
+                  copyToClipboard={copyToClipboard}
+                  removeItem={removeItem}
+                  setLeft={setLeft}
+                  setRight={setRight}
+                />
+              </div>
+            ) : null}
+          </div>
+        );
+      })}
     </div>
   );
 }
