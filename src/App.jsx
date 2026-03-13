@@ -787,6 +787,52 @@ export default function App() {
     return u;
   }
 
+  async function ensurePrebookPdfUrl(item) {
+  if (!item) return item;
+
+  if (!PREBOOK_PRESIGN_API) {
+    throw new Error("Missing env var: VITE_PREBOOK_PRESIGN_API");
+  }
+
+  if (!item.s3Key && !item.reportId) {
+    throw new Error("No s3Key/reportId available for this pre-book report.");
+  }
+
+  const url = new URL(PREBOOK_PRESIGN_API);
+
+  if (item.s3Key) url.searchParams.set("s3Key", item.s3Key);
+  if (item.reportId) url.searchParams.set("reportId", item.reportId);
+
+  const { res, data } = await fetchJson(url.toString(), {
+    method: "GET",
+    headers: { "Content-Type": "application/json" },
+  });
+
+  if (!res.ok || data?.ok === false) {
+    throw new Error(buildErrorMessage(res, data, "Pre-book presign failed"));
+  }
+
+  const presignedUrl =
+    data?.presignedUrl || data?.presigned_url || data?.url || data?.presignedURL || "";
+
+  if (!presignedUrl) {
+    throw new Error("Pre-book presign API returned no URL");
+  }
+
+  const freshUrl = withFragmentBuster(presignedUrl);
+
+  upsertPrebookItem(item.id, {
+    pdfUrl: freshUrl,
+    s3Key: data?.s3Key || item.s3Key || "",
+  });
+
+  return {
+    ...item,
+    pdfUrl: freshUrl,
+    s3Key: data?.s3Key || item.s3Key || "",
+  };
+}
+
   async function generate() {
     setError("");
     setLastApiResponse(null);
@@ -986,20 +1032,26 @@ export default function App() {
 
       const reportId = data.reportId || data.report_id || data.prebookId || data.id || "";
       const s3Key = data.s3Key || data.s3_key || data.pdfKey || data.pdf_key || "";
-      const presignedUrl =
-        data.presignedUrl || data.presigned_url || data.url || data.presignedURL || "";
-
-      const pdfUrl = presignedUrl || "";
-
+      
+      let freshPdfUrl = "";
+      if (s3Key || reportId) {
+        const itemForPresign = {
+          id: historyId,
+          s3Key,
+          reportId,
+        };
+        const refreshed = await ensurePrebookPdfUrl(itemForPresign);
+        freshPdfUrl = refreshed?.pdfUrl || "";
+      }
+      
       upsertPrebookItem(historyId, {
         title: data.title || t,
         reportId,
         status: data.status || "done",
         s3Key,
-        pdfUrl: pdfUrl ? withFragmentBuster(pdfUrl) : "",
+        pdfUrl: freshPdfUrl || "",
         raw: data,
       });
-
       await loadQuota();
       setToast("Pre-book report generated ✅");
     } catch (e) {
@@ -1010,37 +1062,57 @@ export default function App() {
     }
   }
 
-  function setLeft(itemId) {
-    if (activeTab === "instant") {
-      setLeftId(itemId);
-      if (itemId === rightId) {
-        const alt = history.find((x) => x.id !== itemId)?.id || itemId;
-        setRightId(alt);
+async function setLeft(itemId) {
+  if (activeTab === "instant") {
+    setLeftId(itemId);
+    if (itemId === rightId) {
+      const alt = history.find((x) => x.id !== itemId)?.id || itemId;
+      setRightId(alt);
+    }
+  } else {
+    try {
+      const item = prebookHistory.find((x) => x.id === itemId);
+      if (item) {
+        await ensurePrebookPdfUrl(item);
       }
-    } else {
+
       setPreLeftId(itemId);
+
       if (itemId === preRightId) {
         const alt = prebookHistory.find((x) => x.id !== itemId)?.id || itemId;
         setPreRightId(alt);
       }
+    } catch (e) {
+      setError(e?.message || "Could not open pre-book PDF");
     }
   }
+}
 
-  function setRight(itemId) {
-    if (activeTab === "instant") {
-      setRightId(itemId);
-      if (itemId === leftId) {
-        const alt = history.find((x) => x.id !== itemId)?.id || itemId;
-        setLeftId(alt);
+async function setRight(itemId) {
+  if (activeTab === "instant") {
+    setRightId(itemId);
+    if (itemId === leftId) {
+      const alt = history.find((x) => x.id !== itemId)?.id || itemId;
+      setLeftId(alt);
+    }
+  } else {
+    try {
+      const item = prebookHistory.find((x) => x.id === itemId);
+      if (item) {
+        await ensurePrebookPdfUrl(item);
       }
-    } else {
+
       setPreRightId(itemId);
+
       if (itemId === preLeftId) {
         const alt = prebookHistory.find((x) => x.id !== itemId)?.id || itemId;
         setPreLeftId(alt);
       }
+    } catch (e) {
+      setError(e?.message || "Could not open pre-book PDF");
     }
   }
+}
 
   function removeItem(itemId) {
     if (activeTab === "instant") {
