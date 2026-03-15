@@ -270,6 +270,81 @@ function templatePreviewWireframe(template) {
   });
 }
 
+function buildDefaultPrebookTemplate({ questions, brief }) {
+  const now = nowIso();
+  return {
+    id: "default_prebook_template",
+    name: "Standard Default",
+    targetAudience: brief?.audience || "",
+    description: "Fallback default template derived from the current built-in pre-book report structure.",
+    version: 1,
+    createdAt: now,
+    updatedAt: now,
+    layout: [
+      {
+        pageTitle: "Objective & Scope",
+        sections: [
+          {
+            heading: "Objective & Scope",
+            subsections: [
+              {
+                title: "Report Objective",
+                chart: { type: "none", notes: "" },
+                table: { columns: [], rowLimit: 12 },
+                bodyNotes: brief?.objective || "No objective provided.",
+              },
+              {
+                title: "Audience & Coverage",
+                chart: { type: "none", notes: "" },
+                table: { columns: [], rowLimit: 12 },
+                bodyNotes: `Audience: ${brief?.audience || "-"}\nGeography: ${brief?.geography || "-"}\nTime Horizon: ${brief?.horizon || "-"}\nDepth: ${brief?.depth || "-"}\nTone: ${brief?.tone || "-"}`,
+              },
+            ],
+          },
+        ],
+      },
+      {
+        pageTitle: "Research Questions",
+        sections: [
+          {
+            heading: "Research Questions",
+            subsections: (questions || [])
+              .filter((q) => q.trim())
+              .map((q, i) => ({
+                title: `Question ${i + 1}`,
+                chart: { type: "none", notes: "" },
+                table: { columns: [], rowLimit: 12 },
+                bodyNotes: q,
+              })),
+          },
+        ],
+      },
+      {
+        pageTitle: "Special Instructions",
+        sections: [
+          {
+            heading: "Special Instructions",
+            subsections: [
+              {
+                title: "Must Include",
+                chart: { type: "none", notes: "" },
+                table: { columns: [], rowLimit: 12 },
+                bodyNotes: brief?.mustInclude || "No must-include instructions provided.",
+              },
+              {
+                title: "Avoid / Special Notes",
+                chart: { type: "none", notes: "" },
+                table: { columns: [], rowLimit: 12 },
+                bodyNotes: brief?.avoidNotes || "No avoid notes provided.",
+              },
+            ],
+          },
+        ],
+      },
+    ],
+  };
+}
+
 function buildPrebookPromptTips({ topic, questions, brief, activeTemplate }) {
   const tips = [];
   if (!topic.trim()) tips.push("Add a precise topic.");
@@ -365,6 +440,17 @@ export default function App() {
     return prebookTemplates.find((t) => t.id === activePrebookTemplateId) || null;
   }, [prebookTemplates, activePrebookTemplateId]);
 
+  const defaultPrebookTemplate = useMemo(() => {
+    return buildDefaultPrebookTemplate({
+      questions: prebookQuestions,
+      brief: prebookBrief,
+    });
+  }, [prebookQuestions, prebookBrief]);
+
+  const selectedOrDefaultPrebookTemplate = useMemo(() => {
+    return activePrebookTemplate ? deepClone(activePrebookTemplate) : deepClone(defaultPrebookTemplate);
+  }, [activePrebookTemplate, defaultPrebookTemplate]);
+
   const [tplModalOpen, setTplModalOpen] = useState(false);
   const [tplMode, setTplMode] = useState("edit");
   const [tplDraft, setTplDraft] = useState(null);
@@ -382,11 +468,10 @@ export default function App() {
   function toggleDateGroup(dateKey) {
     setExpandedDateGroups((prev) => ({
       ...prev,
-      [dateKey]:
-        prev[dateKey] !== undefined ? !prev[dateKey] : true,
+      [dateKey]: prev[dateKey] !== undefined ? !prev[dateKey] : true,
     }));
   }
-  
+
   function ensurePrebookQuotaEnv() {
     if (!PREBOOK_QUOTA_API) {
       setError("Missing env var: VITE_PREBOOK_QUOTA_API. Add it in Amplify env vars and redeploy.");
@@ -394,7 +479,7 @@ export default function App() {
     }
     return true;
   }
-  
+
   const [lastApiResponse, setLastApiResponse] = useState(null);
 
   const [history, setHistory] = useState(() => loadHistory());
@@ -497,7 +582,6 @@ export default function App() {
     [activeHistory, rightSelId]
   );
 
-  
   const filteredHistory = useMemo(() => {
     const q = normalize(historyQuery);
     const sf = normalize(statusFilter);
@@ -514,13 +598,19 @@ export default function App() {
       return matchesQ && matchesStatus;
     });
   }, [activeHistory, historyQuery, statusFilter]);
-  
+
   const groupedFilteredHistory = useMemo(() => {
     return groupHistoryByDate(filteredHistory);
   }, [filteredHistory]);
 
-  const activeTemplateStats = useMemo(() => templateStats(activePrebookTemplate), [activePrebookTemplate]);
-  const activeTemplateOutline = useMemo(() => outlinePreviewData(activePrebookTemplate), [activePrebookTemplate]);
+  const activeTemplateStats = useMemo(
+    () => templateStats(selectedOrDefaultPrebookTemplate),
+    [selectedOrDefaultPrebookTemplate]
+  );
+  const activeTemplateOutline = useMemo(
+    () => outlinePreviewData(selectedOrDefaultPrebookTemplate),
+    [selectedOrDefaultPrebookTemplate]
+  );
   const tplDraftWireframe = useMemo(() => templatePreviewWireframe(tplDraft), [tplDraft]);
 
   const prebookPromptStrength = useMemo(() => {
@@ -545,7 +635,13 @@ export default function App() {
       : "Needs more detail";
 
   const promptStrengthTips = useMemo(
-    () => buildPrebookPromptTips({ topic: prebookTopic, questions: prebookQuestions, brief: prebookBrief, activeTemplate: activePrebookTemplate }),
+    () =>
+      buildPrebookPromptTips({
+        topic: prebookTopic,
+        questions: prebookQuestions,
+        brief: prebookBrief,
+        activeTemplate: activePrebookTemplate,
+      }),
     [prebookTopic, prebookQuestions, prebookBrief, activePrebookTemplate]
   );
 
@@ -842,50 +938,50 @@ export default function App() {
   }
 
   async function ensurePrebookPdfUrl(item) {
-  if (!item) return item;
+    if (!item) return item;
 
-  if (!PREBOOK_PRESIGN_API) {
-    throw new Error("Missing env var: VITE_PREBOOK_PRESIGN_API");
+    if (!PREBOOK_PRESIGN_API) {
+      throw new Error("Missing env var: VITE_PREBOOK_PRESIGN_API");
+    }
+
+    if (!item.s3Key && !item.reportId) {
+      throw new Error("No s3Key/reportId available for this pre-book report.");
+    }
+
+    const url = new URL(PREBOOK_PRESIGN_API);
+
+    if (item.s3Key) url.searchParams.set("s3Key", item.s3Key);
+    if (item.reportId) url.searchParams.set("reportId", item.reportId);
+
+    const { res, data } = await fetchJson(url.toString(), {
+      method: "GET",
+      headers: { "Content-Type": "application/json" },
+    });
+
+    if (!res.ok || data?.ok === false) {
+      throw new Error(buildErrorMessage(res, data, "Pre-book presign failed"));
+    }
+
+    const presignedUrl =
+      data?.presignedUrl || data?.presigned_url || data?.url || data?.presignedURL || "";
+
+    if (!presignedUrl) {
+      throw new Error("Pre-book presign API returned no URL");
+    }
+
+    const freshUrl = withFragmentBuster(presignedUrl);
+
+    upsertPrebookItem(item.id, {
+      pdfUrl: freshUrl,
+      s3Key: data?.s3Key || item.s3Key || "",
+    });
+
+    return {
+      ...item,
+      pdfUrl: freshUrl,
+      s3Key: data?.s3Key || item.s3Key || "",
+    };
   }
-
-  if (!item.s3Key && !item.reportId) {
-    throw new Error("No s3Key/reportId available for this pre-book report.");
-  }
-
-  const url = new URL(PREBOOK_PRESIGN_API);
-
-  if (item.s3Key) url.searchParams.set("s3Key", item.s3Key);
-  if (item.reportId) url.searchParams.set("reportId", item.reportId);
-
-  const { res, data } = await fetchJson(url.toString(), {
-    method: "GET",
-    headers: { "Content-Type": "application/json" },
-  });
-
-  if (!res.ok || data?.ok === false) {
-    throw new Error(buildErrorMessage(res, data, "Pre-book presign failed"));
-  }
-
-  const presignedUrl =
-    data?.presignedUrl || data?.presigned_url || data?.url || data?.presignedURL || "";
-
-  if (!presignedUrl) {
-    throw new Error("Pre-book presign API returned no URL");
-  }
-
-  const freshUrl = withFragmentBuster(presignedUrl);
-
-  upsertPrebookItem(item.id, {
-    pdfUrl: freshUrl,
-    s3Key: data?.s3Key || item.s3Key || "",
-  });
-
-  return {
-    ...item,
-    pdfUrl: freshUrl,
-    s3Key: data?.s3Key || item.s3Key || "",
-  };
-}
 
   async function generate() {
     setError("");
@@ -1000,7 +1096,21 @@ export default function App() {
     setPrebookLoading(true);
 
     try {
+      const templateToSend = deepClone(selectedOrDefaultPrebookTemplate);
+      const isDefaultTemplate = !activePrebookTemplate;
+
       const payload = {
+        topic: t,
+        questions: qs,
+        brief: deepClone(prebookBrief),
+        template: templateToSend,
+        templateMeta: {
+          templateId: templateToSend?.id || "default_prebook_template",
+          templateName: templateToSend?.name || "Standard Default",
+          isDefault: isDefaultTemplate,
+        },
+
+        // kept for backward compatibility with your current backend
         report: {
           title: prebookTopic.trim() || "RBR Pre-book Report",
           subtitle: `${prebookBrief.audience || "General audience"} • ${prebookBrief.geography || "India"} • ${prebookBrief.horizon || "3-5 years"}`,
@@ -1060,8 +1170,8 @@ export default function App() {
         createdAt: nowIso(),
         topic: t,
         title: t,
-        templateId: activePrebookTemplate?.id || "",
-        templateName: activePrebookTemplate?.name || "",
+        templateId: templateToSend?.id || "default_prebook_template",
+        templateName: templateToSend?.name || "Standard Default",
         brief: deepClone(prebookBrief),
         reportId: "",
         status: "running",
@@ -1086,7 +1196,7 @@ export default function App() {
 
       const reportId = data.reportId || data.report_id || data.prebookId || data.id || "";
       const s3Key = data.s3Key || data.s3_key || data.pdfKey || data.pdf_key || "";
-      
+
       let freshPdfUrl = "";
       if (s3Key || reportId) {
         const itemForPresign = {
@@ -1097,7 +1207,7 @@ export default function App() {
         const refreshed = await ensurePrebookPdfUrl(itemForPresign);
         freshPdfUrl = refreshed?.pdfUrl || "";
       }
-      
+
       upsertPrebookItem(historyId, {
         title: data.title || t,
         reportId,
@@ -1106,6 +1216,7 @@ export default function App() {
         pdfUrl: freshPdfUrl || "",
         raw: data,
       });
+
       await loadQuota();
       setToast("Pre-book report generated ✅");
     } catch (e) {
@@ -1116,57 +1227,57 @@ export default function App() {
     }
   }
 
-async function setLeft(itemId) {
-  if (activeTab === "instant") {
-    setLeftId(itemId);
-    if (itemId === rightId) {
-      const alt = history.find((x) => x.id !== itemId)?.id || itemId;
-      setRightId(alt);
-    }
-  } else {
-    try {
-      const item = prebookHistory.find((x) => x.id === itemId);
-      if (item) {
-        await ensurePrebookPdfUrl(item);
+  async function setLeft(itemId) {
+    if (activeTab === "instant") {
+      setLeftId(itemId);
+      if (itemId === rightId) {
+        const alt = history.find((x) => x.id !== itemId)?.id || itemId;
+        setRightId(alt);
       }
+    } else {
+      try {
+        const item = prebookHistory.find((x) => x.id === itemId);
+        if (item) {
+          await ensurePrebookPdfUrl(item);
+        }
 
-      setPreLeftId(itemId);
+        setPreLeftId(itemId);
 
-      if (itemId === preRightId) {
-        const alt = prebookHistory.find((x) => x.id !== itemId)?.id || itemId;
-        setPreRightId(alt);
+        if (itemId === preRightId) {
+          const alt = prebookHistory.find((x) => x.id !== itemId)?.id || itemId;
+          setPreRightId(alt);
+        }
+      } catch (e) {
+        setError(e?.message || "Could not open pre-book PDF");
       }
-    } catch (e) {
-      setError(e?.message || "Could not open pre-book PDF");
-    }
-  }
-}
-
-async function setRight(itemId) {
-  if (activeTab === "instant") {
-    setRightId(itemId);
-    if (itemId === leftId) {
-      const alt = history.find((x) => x.id !== itemId)?.id || itemId;
-      setLeftId(alt);
-    }
-  } else {
-    try {
-      const item = prebookHistory.find((x) => x.id === itemId);
-      if (item) {
-        await ensurePrebookPdfUrl(item);
-      }
-
-      setPreRightId(itemId);
-
-      if (itemId === preLeftId) {
-        const alt = prebookHistory.find((x) => x.id !== itemId)?.id || itemId;
-        setPreLeftId(alt);
-      }
-    } catch (e) {
-      setError(e?.message || "Could not open pre-book PDF");
     }
   }
-}
+
+  async function setRight(itemId) {
+    if (activeTab === "instant") {
+      setRightId(itemId);
+      if (itemId === leftId) {
+        const alt = history.find((x) => x.id !== itemId)?.id || itemId;
+        setLeftId(alt);
+      }
+    } else {
+      try {
+        const item = prebookHistory.find((x) => x.id === itemId);
+        if (item) {
+          await ensurePrebookPdfUrl(item);
+        }
+
+        setPreRightId(itemId);
+
+        if (itemId === preLeftId) {
+          const alt = prebookHistory.find((x) => x.id !== itemId)?.id || itemId;
+          setPreLeftId(alt);
+        }
+      } catch (e) {
+        setError(e?.message || "Could not open pre-book PDF");
+      }
+    }
+  }
 
   function removeItem(itemId) {
     if (activeTab === "instant") {
@@ -2485,50 +2596,55 @@ async function setRight(itemId) {
                     <div className="mutedSmall">Visible structure before generation</div>
                   </div>
 
-                  {activePrebookTemplate ? (
-                    <>
-                      <div style={{ marginTop: 10, fontWeight: 700 }}>{activePrebookTemplate.name}</div>
-                      <div className="mutedSmall" style={{ marginTop: 6 }}>
-                        Audience: {activePrebookTemplate.targetAudience || "—"}
-                      </div>
-                      <div className="mutedSmall">Version: {activePrebookTemplate.version || 1}</div>
-                      <div className="mutedSmall">Pages: {activeTemplateStats.pages}</div>
-                      <div className="mutedSmall">Sections: {activeTemplateStats.sections}</div>
-                      <div className="mutedSmall">Subheadings: {activeTemplateStats.subsections}</div>
+                  <div style={{ marginTop: 10, fontWeight: 700 }}>
+                    {activePrebookTemplate ? activePrebookTemplate.name : "Standard Default"}
+                  </div>
+                  <div className="mutedSmall" style={{ marginTop: 6 }}>
+                    Audience:{" "}
+                    {activePrebookTemplate
+                      ? activePrebookTemplate.targetAudience || "—"
+                      : prebookBrief.audience || "—"}
+                  </div>
+                  <div className="mutedSmall">
+                    Version: {selectedOrDefaultPrebookTemplate?.version || 1}
+                  </div>
+                  <div className="mutedSmall">Pages: {activeTemplateStats.pages}</div>
+                  <div className="mutedSmall">Sections: {activeTemplateStats.sections}</div>
+                  <div className="mutedSmall">Subheadings: {activeTemplateStats.subsections}</div>
 
-                      <div style={{ marginTop: 12, display: "grid", gap: 8, maxHeight: 280, overflow: "auto" }}>
-                        {activeTemplateOutline.map((page) => (
-                          <div
-                            key={page.key}
-                            style={{
-                              border: "1px solid rgba(255,255,255,0.10)",
-                              borderRadius: 12,
-                              padding: 10,
-                              background: "rgba(255,255,255,0.03)",
-                            }}
-                          >
-                            <div style={{ fontWeight: 650 }}>{page.label}</div>
-                            <div style={{ marginTop: 6, display: "grid", gap: 6 }}>
-                              {page.sections.map((sec) => (
-                                <div key={sec.key} style={{ paddingLeft: 10 }}>
-                                  <div>{sec.label}</div>
-                                  {sec.subsections.map((sub) => (
-                                    <div key={sub.key} className="mutedSmall" style={{ paddingLeft: 10, marginTop: 4 }}>
-                                      {sub.label}
-                                    </div>
-                                  ))}
+                  {!activePrebookTemplate ? (
+                    <div className="mutedSmall" style={{ marginTop: 8, opacity: 0.85 }}>
+                      Using Standard default template.
+                    </div>
+                  ) : null}
+
+                  <div style={{ marginTop: 12, display: "grid", gap: 8, maxHeight: 280, overflow: "auto" }}>
+                    {activeTemplateOutline.map((page) => (
+                      <div
+                        key={page.key}
+                        style={{
+                          border: "1px solid rgba(255,255,255,0.10)",
+                          borderRadius: 12,
+                          padding: 10,
+                          background: "rgba(255,255,255,0.03)",
+                        }}
+                      >
+                        <div style={{ fontWeight: 650 }}>{page.label}</div>
+                        <div style={{ marginTop: 6, display: "grid", gap: 6 }}>
+                          {page.sections.map((sec) => (
+                            <div key={sec.key} style={{ paddingLeft: 10 }}>
+                              <div>{sec.label}</div>
+                              {sec.subsections.map((sub) => (
+                                <div key={sub.key} className="mutedSmall" style={{ paddingLeft: 10, marginTop: 4 }}>
+                                  {sub.label}
                                 </div>
                               ))}
                             </div>
-                          </div>
-                        ))}
+                          ))}
+                        </div>
                       </div>
-                    </>
-                  ) : (
-                    <div className="mutedSmall" style={{ marginTop: 10, opacity: 0.85 }}>
-                      Using Standard default template.
-                    </div>
-                  )}
+                    ))}
+                  </div>
                 </div>
               </div>
             </section>
