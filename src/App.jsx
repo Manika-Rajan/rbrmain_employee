@@ -128,6 +128,22 @@ function makeEmptyTemplate() {
     version: 1,
     createdAt: now,
     updatedAt: now,
+    config: {
+      audience: "",
+      geography: "India",
+      horizon: "3-5 years",
+      depth: "detailed",
+      tone: "strategic",
+      includeCharts: "balanced",
+      includeTables: "balanced",
+      competitorCoverage: "top_10",
+      includeAssumptions: true,
+      mentionDataGaps: true,
+      sectionRecommendations: true,
+      includeScorecard: false,
+      mustInclude: "",
+      avoidNotes: "",
+    },
     layout: [
       {
         pageTitle: "Executive Summary",
@@ -270,79 +286,192 @@ function templatePreviewWireframe(template) {
   });
 }
 
+function buildPrebookConfigFromBrief(brief = {}) {
+  return {
+    audience: brief?.audience || "",
+    geography: brief?.geography || "India",
+    horizon: brief?.horizon || "3-5 years",
+    depth: brief?.depth || "detailed",
+    tone: brief?.tone || "strategic",
+    includeCharts: brief?.includeCharts || "balanced",
+    includeTables: brief?.includeTables || "balanced",
+    competitorCoverage: brief?.competitorCoverage || "top_10",
+    includeAssumptions: brief?.includeAssumptions ?? true,
+    mentionDataGaps: brief?.mentionDataGaps ?? true,
+    sectionRecommendations: brief?.sectionRecommendations ?? true,
+    includeScorecard: brief?.includeScorecard ?? false,
+    mustInclude: brief?.mustInclude || "",
+    avoidNotes: brief?.avoidNotes || "",
+  };
+}
+
+function normalizePrebookTemplate(template, fallbackBrief = DEFAULT_PREBOOK_BRIEF) {
+  const base = template && typeof template === "object" ? deepClone(template) : makeEmptyTemplate();
+  const config = {
+    ...buildPrebookConfigFromBrief(fallbackBrief),
+    ...(base?.config || {}),
+  };
+  return {
+    ...base,
+    targetAudience: base?.targetAudience || config.audience || "",
+    config,
+    layout: Array.isArray(base?.layout) ? base.layout : [],
+  };
+}
+
+function buildGenerationBlueprint({ template, brief, questions, topic }) {
+  const normalizedTemplate = normalizePrebookTemplate(template, brief);
+  const layout = Array.isArray(normalizedTemplate?.layout) ? normalizedTemplate.layout : [];
+  const mergedConfig = {
+    ...normalizedTemplate.config,
+    ...buildPrebookConfigFromBrief(brief),
+  };
+
+  return {
+    title: topic || "RBR Pre-book Report",
+    subtitle: `${mergedConfig.audience || "General audience"} • ${mergedConfig.geography || "India"} • ${mergedConfig.horizon || "3-5 years"}`,
+    pages: layout.map((page, pi) => ({
+      id: page?.id || `page_${pi + 1}`,
+      title: page?.pageTitle || `Page ${pi + 1}`,
+      sections: (page?.sections || []).map((sec, si) => ({
+        id: sec?.id || `section_${pi + 1}_${si + 1}`,
+        heading: sec?.heading || `Section ${si + 1}`,
+        subsections: (sec?.subsections || []).map((sub, xi) => ({
+          id: sub?.id || `sub_${pi + 1}_${si + 1}_${xi + 1}`,
+          title: sub?.title || `Subheading ${xi + 1}`,
+          chart: {
+            type: sub?.chart?.type || "none",
+            notes: sub?.chart?.notes || "",
+          },
+          table: {
+            columns: Array.isArray(sub?.table?.columns) ? sub.table.columns : [],
+            rowLimit: Number(sub?.table?.rowLimit || 12),
+          },
+          bodyNotes: sub?.bodyNotes || "",
+        })),
+      })),
+    })),
+    researchQuestions: Array.isArray(questions) ? questions : [],
+    brief: deepClone(brief || {}),
+    reportConfig: mergedConfig,
+  };
+}
+
+function buildLegacyReportFromBlueprint(blueprint) {
+  return {
+    title: blueprint?.title || "RBR Pre-book Report",
+    subtitle: blueprint?.subtitle || "",
+    sections: (blueprint?.pages || []).flatMap((page) =>
+      (page?.sections || []).map((section) => ({
+        heading: section?.heading || page?.title || "Untitled section",
+        subheadings: (section?.subsections || []).map((sub) => ({
+          title: sub?.title || "Untitled subheading",
+          content: sub?.bodyNotes || "",
+          charts:
+            sub?.chart?.type && sub.chart.type !== "none"
+              ? [
+                  {
+                    type: sub.chart.type,
+                    notes: sub?.chart?.notes || "",
+                  },
+                ]
+              : [],
+          tables:
+            Array.isArray(sub?.table?.columns) && sub.table.columns.length
+              ? [
+                  {
+                    columns: sub.table.columns,
+                    rowLimit: Number(sub?.table?.rowLimit || 12),
+                  },
+                ]
+              : [],
+        })),
+      }))
+    ),
+  };
+}
+
 function buildDefaultPrebookTemplate({ questions, brief }) {
   const now = nowIso();
-  return {
-    id: "default_prebook_template",
-    name: "Standard Default",
-    targetAudience: brief?.audience || "",
-    description: "Fallback default template derived from the current built-in pre-book report structure.",
-    version: 1,
-    createdAt: now,
-    updatedAt: now,
-    layout: [
-      {
-        pageTitle: "Objective & Scope",
-        sections: [
-          {
-            heading: "Objective & Scope",
-            subsections: [
-              {
-                title: "Report Objective",
-                chart: { type: "none", notes: "" },
-                table: { columns: [], rowLimit: 12 },
-                bodyNotes: brief?.objective || "No objective provided.",
-              },
-              {
-                title: "Audience & Coverage",
-                chart: { type: "none", notes: "" },
-                table: { columns: [], rowLimit: 12 },
-                bodyNotes: `Audience: ${brief?.audience || "-"}\nGeography: ${brief?.geography || "-"}\nTime Horizon: ${brief?.horizon || "-"}\nDepth: ${brief?.depth || "-"}\nTone: ${brief?.tone || "-"}`,
-              },
-            ],
-          },
-        ],
-      },
-      {
-        pageTitle: "Research Questions",
-        sections: [
-          {
-            heading: "Research Questions",
-            subsections: (questions || [])
-              .filter((q) => q.trim())
-              .map((q, i) => ({
-                title: `Question ${i + 1}`,
-                chart: { type: "none", notes: "" },
-                table: { columns: [], rowLimit: 12 },
-                bodyNotes: q,
-              })),
-          },
-        ],
-      },
-      {
-        pageTitle: "Special Instructions",
-        sections: [
-          {
-            heading: "Special Instructions",
-            subsections: [
-              {
-                title: "Must Include",
-                chart: { type: "none", notes: "" },
-                table: { columns: [], rowLimit: 12 },
-                bodyNotes: brief?.mustInclude || "No must-include instructions provided.",
-              },
-              {
-                title: "Avoid / Special Notes",
-                chart: { type: "none", notes: "" },
-                table: { columns: [], rowLimit: 12 },
-                bodyNotes: brief?.avoidNotes || "No avoid notes provided.",
-              },
-            ],
-          },
-        ],
-      },
-    ],
-  };
+  return normalizePrebookTemplate(
+    {
+      id: "default_prebook_template",
+      name: "Standard Default",
+      targetAudience: brief?.audience || "",
+      description: "Fallback default template derived from the current built-in pre-book report structure.",
+      version: 1,
+      createdAt: now,
+      updatedAt: now,
+      config: buildPrebookConfigFromBrief(brief),
+      layout: [
+        {
+          pageTitle: "Objective & Scope",
+          sections: [
+            {
+              heading: "Objective & Scope",
+              subsections: [
+                {
+                  title: "Report Objective",
+                  chart: { type: "none", notes: "" },
+                  table: { columns: [], rowLimit: 12 },
+                  bodyNotes: brief?.objective || "No objective provided.",
+                },
+                {
+                  title: "Audience & Coverage",
+                  chart: { type: "none", notes: "" },
+                  table: { columns: [], rowLimit: 12 },
+                  bodyNotes: `Audience: ${brief?.audience || "-"}
+Geography: ${brief?.geography || "-"}
+Time Horizon: ${brief?.horizon || "-"}
+Depth: ${brief?.depth || "-"}
+Tone: ${brief?.tone || "-"}`,
+                },
+              ],
+            },
+          ],
+        },
+        {
+          pageTitle: "Research Questions",
+          sections: [
+            {
+              heading: "Research Questions",
+              subsections: (questions || [])
+                .filter((q) => q.trim())
+                .map((q, i) => ({
+                  title: `Question ${i + 1}`,
+                  chart: { type: "none", notes: "" },
+                  table: { columns: [], rowLimit: 12 },
+                  bodyNotes: q,
+                })),
+            },
+          ],
+        },
+        {
+          pageTitle: "Special Instructions",
+          sections: [
+            {
+              heading: "Special Instructions",
+              subsections: [
+                {
+                  title: "Must Include",
+                  chart: { type: "none", notes: "" },
+                  table: { columns: [], rowLimit: 12 },
+                  bodyNotes: brief?.mustInclude || "No must-include instructions provided.",
+                },
+                {
+                  title: "Avoid / Special Notes",
+                  chart: { type: "none", notes: "" },
+                  table: { columns: [], rowLimit: 12 },
+                  bodyNotes: brief?.avoidNotes || "No avoid notes provided.",
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    },
+    brief
+  );
 }
 
 function buildPrebookPromptTips({ topic, questions, brief, activeTemplate }) {
@@ -437,8 +566,9 @@ export default function App() {
   );
 
   const activePrebookTemplate = useMemo(() => {
-    return prebookTemplates.find((t) => t.id === activePrebookTemplateId) || null;
-  }, [prebookTemplates, activePrebookTemplateId]);
+    const found = prebookTemplates.find((t) => t.id === activePrebookTemplateId) || null;
+    return found ? normalizePrebookTemplate(found, prebookBrief) : null;
+  }, [prebookTemplates, activePrebookTemplateId, prebookBrief]);
 
   const defaultPrebookTemplate = useMemo(() => {
     return buildDefaultPrebookTemplate({
@@ -764,7 +894,7 @@ export default function App() {
     }
 
     const now = nowIso();
-    const nextTpl = { ...tplDraft, name, updatedAt: now };
+    const nextTpl = normalizePrebookTemplate({ ...tplDraft, name, updatedAt: now }, prebookBrief);
     const list = loadPrebookTemplates();
     const idx = list.findIndex((t) => t.id === nextTpl.id);
 
@@ -815,13 +945,18 @@ export default function App() {
       const next = imported
         .filter((t) => t && typeof t === "object" && typeof t.id === "string")
         .slice(0, 200)
-        .map((t) => ({
-          ...t,
-          updatedAt: t.updatedAt || nowIso(),
-          createdAt: t.createdAt || nowIso(),
-          version: Number.isFinite(t.version) ? t.version : 1,
-          layout: Array.isArray(t.layout) ? t.layout : [],
-        }));
+        .map((t) =>
+          normalizePrebookTemplate(
+            {
+              ...t,
+              updatedAt: t.updatedAt || nowIso(),
+              createdAt: t.createdAt || nowIso(),
+              version: Number.isFinite(t.version) ? t.version : 1,
+              layout: Array.isArray(t.layout) ? t.layout : [],
+            },
+            prebookBrief
+          )
+        );
       persistTemplates(next, next[0]?.id || "");
       setToast(`Imported ${next.length} template(s) ✅`);
     } catch {
@@ -1096,12 +1231,22 @@ export default function App() {
     setPrebookLoading(true);
 
     try {
-      const templateToSend = deepClone(selectedOrDefaultPrebookTemplate);
+      const templateToSend = normalizePrebookTemplate(selectedOrDefaultPrebookTemplate, prebookBrief);
       const isDefaultTemplate = !activePrebookTemplate;
+      const reportConfig = {
+        ...templateToSend.config,
+        ...buildPrebookConfigFromBrief(prebookBrief),
+      };
+      const reportBlueprint = buildGenerationBlueprint({
+        template: templateToSend,
+        brief: prebookBrief,
+        questions: qs,
+        topic: t,
+      });
+      const legacyReport = buildLegacyReportFromBlueprint(reportBlueprint);
 
       const payload = {
         topic: t,
-        questions: qs,
         brief: deepClone(prebookBrief),
         template: templateToSend,
         templateMeta: {
@@ -1109,59 +1254,14 @@ export default function App() {
           templateName: templateToSend?.name || "Standard Default",
           isDefault: isDefaultTemplate,
         },
+        reportConfig,
+        researchQuestions: qs,
+        reportBlueprint,
 
         // kept for backward compatibility with your current backend
-        report: {
-          title: prebookTopic.trim() || "RBR Pre-book Report",
-          subtitle: `${prebookBrief.audience || "General audience"} • ${prebookBrief.geography || "India"} • ${prebookBrief.horizon || "3-5 years"}`,
-          sections: [
-            {
-              heading: "Objective & Scope",
-              subheadings: [
-                {
-                  title: "Report Objective",
-                  content: prebookBrief.objective || "No objective provided.",
-                  charts: [],
-                  tables: [],
-                },
-                {
-                  title: "Audience & Coverage",
-                  content: `Audience: ${prebookBrief.audience || "-"}\nGeography: ${prebookBrief.geography || "-"}\nTime Horizon: ${prebookBrief.horizon || "-"}\nDepth: ${prebookBrief.depth || "-"}\nTone: ${prebookBrief.tone || "-"}`,
-                  charts: [],
-                  tables: [],
-                },
-              ],
-            },
-            {
-              heading: "Research Questions",
-              subheadings: prebookQuestions
-                .filter((q) => q.trim())
-                .map((q, i) => ({
-                  title: `Question ${i + 1}`,
-                  content: q,
-                  charts: [],
-                  tables: [],
-                })),
-            },
-            {
-              heading: "Special Instructions",
-              subheadings: [
-                {
-                  title: "Must Include",
-                  content: prebookBrief.mustInclude || "No must-include instructions provided.",
-                  charts: [],
-                  tables: [],
-                },
-                {
-                  title: "Avoid / Special Notes",
-                  content: prebookBrief.avoidNotes || "No avoid notes provided.",
-                  charts: [],
-                  tables: [],
-                },
-              ],
-            },
-          ],
-        },
+        questions: qs,
+        report: legacyReport,
+        legacyReport,
       };
 
       const historyId = `prebook-${Date.now()}`;
@@ -1173,6 +1273,9 @@ export default function App() {
         templateId: templateToSend?.id || "default_prebook_template",
         templateName: templateToSend?.name || "Standard Default",
         brief: deepClone(prebookBrief),
+        reportConfig: deepClone(reportConfig),
+        researchQuestions: deepClone(qs),
+        blueprint: deepClone(reportBlueprint),
         reportId: "",
         status: "running",
         pdfUrl: "",
@@ -1215,6 +1318,10 @@ export default function App() {
         s3Key,
         pdfUrl: freshPdfUrl || "",
         raw: data,
+        templateApplied: payload.templateMeta,
+        reportConfig: deepClone(payload.reportConfig),
+        researchQuestions: deepClone(payload.researchQuestions),
+        blueprint: deepClone(payload.reportBlueprint),
       });
 
       await loadQuota();
