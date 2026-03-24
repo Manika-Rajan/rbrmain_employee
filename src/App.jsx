@@ -958,7 +958,12 @@ export default function App() {
     if (!PREBOOK_PRESIGN_API) {
       throw new Error("Missing env var: VITE_PREBOOK_PRESIGN_API");
     }
-
+    
+    const status = prettyStatus(item.status);
+    if (!["completed", "done"].includes(status)) {
+      throw new Error(`This pre-book report is still ${status}.`);
+    }
+    
     if (!item.s3Key && !item.reportId) {
       throw new Error("No s3Key/reportId available for this pre-book report.");
     }
@@ -1249,12 +1254,20 @@ export default function App() {
     } else {
       try {
         const item = prebookHistory.find((x) => x.id === itemId);
+    
         if (item) {
-          await ensurePrebookPdfUrl(item);
+          const status = prettyStatus(item.status);
+          if (status === "completed" || status === "done") {
+            await ensurePrebookPdfUrl(item);
+          } else if (status === "failed") {
+            throw new Error("This pre-book report failed.");
+          } else {
+            setToast(`This pre-book report is still ${status}.`);
+          }
         }
-
+    
         setPreLeftId(itemId);
-
+    
         if (itemId === preRightId) {
           const alt = prebookHistory.find((x) => x.id !== itemId)?.id || itemId;
           setPreRightId(alt);
@@ -1275,12 +1288,20 @@ export default function App() {
     } else {
       try {
         const item = prebookHistory.find((x) => x.id === itemId);
+    
         if (item) {
-          await ensurePrebookPdfUrl(item);
+          const status = prettyStatus(item.status);
+          if (status === "completed" || status === "done") {
+            await ensurePrebookPdfUrl(item);
+          } else if (status === "failed") {
+            throw new Error("This pre-book report failed.");
+          } else {
+            setToast(`This pre-book report is still ${status}.`);
+          }
         }
-
+    
         setPreRightId(itemId);
-
+    
         if (itemId === preLeftId) {
           const alt = prebookHistory.find((x) => x.id !== itemId)?.id || itemId;
           setPreLeftId(alt);
