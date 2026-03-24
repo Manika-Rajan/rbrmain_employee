@@ -419,6 +419,7 @@ export default function App() {
 
   const PREBOOK_QUOTA_API = import.meta.env.VITE_PREBOOK_QUOTA_API;
   const PREBOOK_GENERATE_API = import.meta.env.VITE_PREBOOK_GENERATE_API;
+  const PREBOOK_STATUS_API = import.meta.env.VITE_PREBOOK_STATUS_API;
   const PREBOOK_PRESIGN_API = import.meta.env.VITE_PREBOOK_PRESIGN_API || PRESIGN_API;
 
   const [topic, setTopic] = useState("FMCG market report India");
@@ -688,6 +689,7 @@ export default function App() {
     const missing = [];
     if (!PREBOOK_QUOTA_API) missing.push("VITE_PREBOOK_QUOTA_API");
     if (!PREBOOK_GENERATE_API) missing.push("VITE_PREBOOK_GENERATE_API");
+    if (!PREBOOK_STATUS_API) missing.push("VITE_PREBOOK_STATUS_API");
     if (missing.length) {
       setError(`Missing env var(s): ${missing.join(", ")}. Add them in Amplify env vars and redeploy.`);
       return false;
@@ -930,6 +932,83 @@ export default function App() {
     }
   }
 
+  async function pollPrebookStatusUntilDone({ reportId, historyId }) {
+    const startedAt = Date.now();
+    pollAbortRef.current.aborted = false;
+  
+    setModalOpen(true);
+    setModalTitle("Generating pre-book report…");
+    setModalSub("Queued • waiting for worker");
+    setProgressPct(8);
+  
+    const timer = setInterval(() => {
+      if (!mountedRef.current) return;
+      setProgressPct((p) => (p >= 92 ? p : Math.min(92, p + 1)));
+    }, 900);
+  
+    try {
+      while (Date.now() - startedAt < MAX_WAIT_MS) {
+        if (!mountedRef.current) throw new Error("Page closed");
+        if (pollAbortRef.current.aborted) throw new Error("Polling aborted");
+  
+        const url = new URL(PREBOOK_STATUS_API);
+        url.searchParams.set("reportId", reportId);
+  
+        const { res, data } = await fetchJson(url.toString(), {
+          method: "GET",
+          headers: { "Content-Type": "application/json" },
+        });
+  
+        if (!mountedRef.current) throw new Error("Page closed");
+  
+        setLastApiResponse(data);
+  
+        if (!res.ok || !data?.ok) {
+          throw new Error(buildErrorMessage(res, data, "Pre-book status check failed"));
+        }
+  
+        const status = prettyStatus(data.status);
+        const errMsg = data.errorMessage || data.error || data.details || "";
+  
+        upsertPrebookItem(historyId, {
+          reportId: data.reportId || reportId,
+          reportName: data.reportName || undefined,
+          topic: data.topic || undefined,
+          status: data.status || "unknown",
+          s3Key: data.s3Key || data.s3_key || data.pdfKey || data.pdf_key || "",
+          pdfUrl: data.pdfUrl || "",
+          raw: data,
+        });
+  
+        if (status === "completed" || status === "done") {
+          setModalSub("Finalizing • preparing download link");
+          setProgressPct(95);
+          return data;
+        }
+  
+        if (status === "failed") {
+          throw new Error(errMsg || "Pre-book report generation failed");
+        }
+  
+        setModalSub(
+          status === "rendering_pdf"
+            ? "Rendering PDF • almost done"
+            : status === "json_ready"
+            ? "Content ready • preparing PDF"
+            : status === "generating"
+            ? "Generating content • researching + drafting"
+            : "Queued • waiting for worker"
+        );
+  
+        await new Promise((r) => setTimeout(r, POLL_EVERY_MS));
+      }
+  
+      throw new Error(`Pre-book report is still running after ${Math.round(MAX_WAIT_MS / 1000)}s. Please check again shortly.`);
+    } finally {
+      clearInterval(timer);
+    }
+  }
+  
   async function getPresignedUrl({ userPhone, instantId, s3Key, api }) {
     const endpoint = api || PRESIGN_API;
     const url = new URL(endpoint);
@@ -1198,7 +1277,7 @@ export default function App() {
         templateName: templateToSend?.name || "Standard Default",
         brief: deepClone(prebookBrief),
         reportId: "",
-        status: "running",
+        status: "queued",
         pdfUrl: "",
         s3Key: "",
         raw: null,
@@ -1231,10 +1310,55 @@ export default function App() {
         raw: data,
       });
       
+      if (!reportId) {
+        throw new Error("Pre-book generate API did not return reportId");
+      }
+      
+      setModalOpen(true);
+      setModalTitle("Generating pre-book report…");
+      setModalSub("Queued • waiting for worker");
+      setProgressPct(10);
+      
       await loadQuota();
       setToast("Pre-book generation started ✅");
       
-      await loadQuota();
+      const statusData = await pollPrebookStatusUntilDone({ reportId, historyId });
+      if (!statusData || !mountedRef.current) return;
+      
+      const finalItem = prebookHistory.find((x) => x.id === historyId) || {
+        id: historyId,
+        reportId,
+        status: statusData.status || "completed",
+        s3Key: statusData.s3Key || statusData.pdfKey || "",
+      };
+      
+      let freshPdfUrl = "";
+      if (
+        prettyStatus(statusData.status) === "completed" ||
+        prettyStatus(statusData.status) === "done"
+      ) {
+        const refreshed = await ensurePrebookPdfUrl({
+          ...finalItem,
+          reportId: statusData.reportId || reportId,
+          status: statusData.status || "completed",
+          s3Key: statusData.s3Key || statusData.pdfKey || finalItem.s3Key || "",
+        });
+        freshPdfUrl = refreshed?.pdfUrl || "";
+      }
+      
+      upsertPrebookItem(historyId, {
+        reportName: statusData.reportName || reportDisplayName,
+        title: statusData.reportName || reportDisplayName,
+        reportId: statusData.reportId || reportId,
+        status: statusData.status || "completed",
+        s3Key: statusData.s3Key || statusData.pdfKey || "",
+        pdfUrl: freshPdfUrl || "",
+        raw: statusData,
+      });
+      
+      setModalSub("Ready");
+      setProgressPct(100);
+      setTimeout(() => mountedRef.current && setModalOpen(false), 550);
       setToast("Pre-book report generated ✅");
     } catch (e) {
       setError(e?.message || "Pre-book generation failed");
