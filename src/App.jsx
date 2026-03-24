@@ -1215,28 +1215,20 @@ export default function App() {
 
       const reportId = data.reportId || data.report_id || data.prebookId || data.id || "";
       const s3Key = data.s3Key || data.s3_key || data.pdfKey || data.pdf_key || "";
-
-      let freshPdfUrl = "";
-      if (s3Key || reportId) {
-        const itemForPresign = {
-          id: historyId,
-          s3Key,
-          reportId,
-        };
-        const refreshed = await ensurePrebookPdfUrl(itemForPresign);
-        freshPdfUrl = refreshed?.pdfUrl || "";
-      }
-
+      
       upsertPrebookItem(historyId, {
         reportName: data.reportName || data.report_name || data.title || reportDisplayName,
         title: data.title || reportDisplayName,
         reportId,
-        status: data.status || "done",
+        status: data.status || "queued",
         s3Key,
-        pdfUrl: freshPdfUrl || "",
+        pdfUrl: "",
         raw: data,
       });
-
+      
+      await loadQuota();
+      setToast("Pre-book generation started ✅");
+      
       await loadQuota();
       setToast("Pre-book report generated ✅");
     } catch (e) {
