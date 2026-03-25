@@ -1325,9 +1325,9 @@ export default function App() {
       const statusData = await pollPrebookStatusUntilDone({ reportId, historyId });
       if (!statusData || !mountedRef.current) return;
       
-      const finalItem = prebookHistory.find((x) => x.id === historyId) || {
+      const finalItem = {
         id: historyId,
-        reportId,
+        reportId: statusData.reportId || reportId,
         status: statusData.status || "completed",
         s3Key: statusData.s3Key || statusData.pdfKey || "",
       };
