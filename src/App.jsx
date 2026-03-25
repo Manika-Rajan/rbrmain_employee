@@ -585,6 +585,38 @@ export default function App() {
     if (activeTab === "prebook") loadQuota();
   }, [activeTab]);
 
+  useEffect(() => {
+  if (!prebookHistory.length) return;
+  if (!PREBOOK_STATUS_API) return;
+
+  let cancelled = false;
+
+  const staleOrPending = prebookHistory.filter((item) => {
+    const st = prettyStatus(item.status);
+    return (
+      item?.reportId &&
+      !["completed", "done", "failed"].includes(st)
+    );
+  });
+
+  if (!staleOrPending.length) return;
+
+  (async () => {
+    for (const item of staleOrPending) {
+      if (cancelled) return;
+      try {
+        await refreshPrebookItem(item);
+      } catch {
+        // keep silent; user can still manually retry by clicking view
+      }
+    }
+  })();
+
+  return () => {
+    cancelled = true;
+  };
+}, [PREBOOK_STATUS_API, prebookHistory.length]);
+
   const activeHistory = activeTab === "instant" ? history : prebookHistory;
   const leftSelId = activeTab === "instant" ? leftId : preLeftId;
   const rightSelId = activeTab === "instant" ? rightId : preRightId;
@@ -1420,80 +1452,90 @@ async function refreshPrebookItem(itemOrId) {
       setTimeout(() => mountedRef.current && setModalOpen(false), 550);
       setToast("Pre-book report generated ✅");
     } catch (e) {
-      setError(e?.message || "Pre-book generation failed");
+      const msg = e?.message || "Pre-book generation failed";
+      setError(msg);
       setToast("Pre-book generation failed");
+    
+      if (typeof historyId !== "undefined") {
+        upsertPrebookItem(historyId, {
+          status: "failed",
+          raw: { error: msg },
+        });
+      }
     } finally {
       setPrebookLoading(false);
     }
   }
 
   async function setLeft(itemId) {
-    if (activeTab === "instant") {
-      setLeftId(itemId);
-      if (itemId === rightId) {
-        const alt = history.find((x) => x.id !== itemId)?.id || itemId;
-        setRightId(alt);
-      }
-    } else {
-      try {
-        const item = prebookHistory.find((x) => x.id === itemId);
-    
-        if (item) {
-          const status = prettyStatus(item.status);
-          if (status === "completed" || status === "done") {
-            await ensurePrebookPdfUrl(item);
-          } else if (status === "failed") {
-            throw new Error("This pre-book report failed.");
-          } else {
-            setToast(`This pre-book report is still ${status}.`);
-          }
-        }
-    
-        setPreLeftId(itemId);
-    
-        if (itemId === preRightId) {
-          const alt = prebookHistory.find((x) => x.id !== itemId)?.id || itemId;
-          setPreRightId(alt);
-        }
-      } catch (e) {
-        setError(e?.message || "Could not open pre-book PDF");
-      }
+  if (activeTab === "instant") {
+    setLeftId(itemId);
+    if (itemId === rightId) {
+      const alt = history.find((x) => x.id !== itemId)?.id || itemId;
+      setRightId(alt);
     }
+    return;
   }
 
-  async function setRight(itemId) {
-    if (activeTab === "instant") {
-      setRightId(itemId);
-      if (itemId === leftId) {
-        const alt = history.find((x) => x.id !== itemId)?.id || itemId;
-        setLeftId(alt);
-      }
-    } else {
-      try {
-        const item = prebookHistory.find((x) => x.id === itemId);
-    
-        if (item) {
-          const status = prettyStatus(item.status);
-          if (status === "completed" || status === "done") {
-            await ensurePrebookPdfUrl(item);
-          } else if (status === "failed") {
-            throw new Error("This pre-book report failed.");
-          } else {
-            setToast(`This pre-book report is still ${status}.`);
-          }
-        }
-    
-        setPreRightId(itemId);
-    
-        if (itemId === preLeftId) {
-          const alt = prebookHistory.find((x) => x.id !== itemId)?.id || itemId;
-          setPreLeftId(alt);
-        }
-      } catch (e) {
-        setError(e?.message || "Could not open pre-book PDF");
+  try {
+    const item = prebookHistory.find((x) => x.id === itemId);
+
+    if (item) {
+      const refreshed = await refreshPrebookItem(item);
+      const status = prettyStatus(refreshed?.status || item.status);
+
+      if (!["completed", "done"].includes(status) && status !== "failed") {
+        setToast(`This pre-book report is still ${status}.`);
+      } else if (status === "failed") {
+        throw new Error("This pre-book report failed.");
       }
     }
+
+    setPreLeftId(itemId);
+
+    if (itemId === preRightId) {
+      const alt = prebookHistory.find((x) => x.id !== itemId)?.id || itemId;
+      setPreRightId(alt);
+    }
+  } catch (e) {
+    setError(e?.message || "Could not open pre-book PDF");
   }
+}
+
+  async function setRight(itemId) {
+  if (activeTab === "instant") {
+    setRightId(itemId);
+    if (itemId === leftId) {
+      const alt = history.find((x) => x.id !== itemId)?.id || itemId;
+      setLeftId(alt);
+    }
+    return;
+  }
+
+  try {
+    const item = prebookHistory.find((x) => x.id === itemId);
+
+    if (item) {
+      const refreshed = await refreshPrebookItem(item);
+      const status = prettyStatus(refreshed?.status || item.status);
+
+      if (!["completed", "done"].includes(status) && status !== "failed") {
+        setToast(`This pre-book report is still ${status}.`);
+      } else if (status === "failed") {
+        throw new Error("This pre-book report failed.");
+      }
+    }
+
+    setPreRightId(itemId);
+
+    if (itemId === preLeftId) {
+      const alt = prebookHistory.find((x) => x.id !== itemId)?.id || itemId;
+      setPreLeftId(alt);
+    }
+  } catch (e) {
+    setError(e?.message || "Could not open pre-book PDF");
+  }
+}
 
   function removeItem(itemId) {
     if (activeTab === "instant") {
