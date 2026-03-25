@@ -860,6 +860,65 @@ export default function App() {
     setPrebookHistory((prev) => prev.map((x) => (x.id === id ? { ...x, ...patch } : x)));
   }
 
+  async function fetchPrebookStatus(reportId) {
+  if (!PREBOOK_STATUS_API) {
+    throw new Error("Missing env var: VITE_PREBOOK_STATUS_API");
+  }
+  if (!reportId) {
+    throw new Error("Missing reportId for pre-book status check");
+  }
+
+  const url = new URL(PREBOOK_STATUS_API);
+  url.searchParams.set("reportId", reportId);
+
+  const { res, data } = await fetchJson(url.toString(), {
+    method: "GET",
+    headers: { "Content-Type": "application/json" },
+  });
+
+  if (!res.ok || !data?.ok) {
+    throw new Error(buildErrorMessage(res, data, "Pre-book status check failed"));
+  }
+
+  return data;
+}
+
+async function refreshPrebookItem(itemOrId) {
+  const item =
+    typeof itemOrId === "string"
+      ? prebookHistory.find((x) => x.id === itemOrId) || null
+      : itemOrId || null;
+
+  if (!item) return null;
+  if (!item.reportId) return item;
+
+  const statusData = await fetchPrebookStatus(item.reportId);
+
+  const nextItem = {
+    ...item,
+    reportId: statusData.reportId || item.reportId,
+    reportName: statusData.reportName || item.reportName || item.title,
+    title: statusData.reportName || item.title || item.reportName,
+    topic: statusData.topic || item.topic,
+    status: statusData.status || item.status || "unknown",
+    s3Key: statusData.s3Key || statusData.pdfKey || item.s3Key || "",
+    pdfUrl: "",
+    raw: statusData,
+  };
+
+  if (["completed", "done"].includes(prettyStatus(nextItem.status))) {
+    const refreshed = await ensurePrebookPdfUrl(nextItem);
+    return {
+      ...nextItem,
+      pdfUrl: refreshed?.pdfUrl || nextItem.pdfUrl || "",
+      s3Key: refreshed?.s3Key || nextItem.s3Key || "",
+    };
+  }
+
+  upsertPrebookItem(item.id, nextItem);
+  return nextItem;
+}
+
   async function pollStatusUntilDone({ userPhone, instantId, historyId }) {
     const startedAt = Date.now();
     pollAbortRef.current.aborted = false;
