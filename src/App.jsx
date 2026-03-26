@@ -915,41 +915,48 @@ export default function App() {
   return data;
 }
 
-async function refreshPrebookItem(itemOrId) {
-  const item =
-    typeof itemOrId === "string"
-      ? prebookHistory.find((x) => x.id === itemOrId) || null
-      : itemOrId || null;
-
-  if (!item) return null;
-  if (!item.reportId) return item;
-
-  const statusData = await fetchPrebookStatus(item.reportId);
-
-  const nextItem = {
-    ...item,
-    reportId: statusData.reportId || item.reportId,
-    reportName: statusData.reportName || item.reportName || item.title,
-    title: statusData.reportName || item.title || item.reportName,
-    topic: statusData.topic || item.topic,
-    status: statusData.status || item.status || "unknown",
-    s3Key: statusData.s3Key || statusData.pdfKey || item.s3Key || "",
-    pdfUrl: "",
-    raw: statusData,
-  };
-
-  if (["completed", "done"].includes(prettyStatus(nextItem.status))) {
-    const refreshed = await ensurePrebookPdfUrl(nextItem);
-    return {
-      ...nextItem,
-      pdfUrl: refreshed?.pdfUrl || nextItem.pdfUrl || "",
-      s3Key: refreshed?.s3Key || nextItem.s3Key || "",
+  async function refreshPrebookItem(itemOrId) {
+    const item =
+      typeof itemOrId === "string"
+        ? prebookHistory.find((x) => x.id === itemOrId) || null
+        : itemOrId || null;
+  
+    if (!item) return null;
+    if (!item.reportId) return item;
+  
+    const statusData = await fetchPrebookStatus(item.reportId);
+  
+    const nextItem = {
+      ...item,
+      reportId: statusData.reportId || item.reportId,
+      reportName: statusData.reportName || item.reportName || item.title,
+      title: statusData.reportName || item.title || item.reportName,
+      topic: statusData.topic || item.topic,
+      status: statusData.status || item.status || "unknown",
+      s3Key: statusData.s3Key || statusData.pdfKey || item.s3Key || "",
+      pdfUrl: statusData.pdfUrl || item.pdfUrl || "",
+      raw: statusData,
     };
+  
+    // IMPORTANT: always persist the latest status first
+    upsertPrebookItem(item.id, nextItem);
+  
+    if (["completed", "done"].includes(prettyStatus(nextItem.status))) {
+      const refreshed = await ensurePrebookPdfUrl(nextItem);
+  
+      const finalItem = {
+        ...nextItem,
+        pdfUrl: refreshed?.pdfUrl || nextItem.pdfUrl || "",
+        s3Key: refreshed?.s3Key || nextItem.s3Key || "",
+      };
+  
+      // IMPORTANT: persist again after presign refresh
+      upsertPrebookItem(item.id, finalItem);
+      return finalItem;
+    }
+  
+    return nextItem;
   }
-
-  upsertPrebookItem(item.id, nextItem);
-  return nextItem;
-}
 
   async function pollStatusUntilDone({ userPhone, instantId, historyId }) {
     const startedAt = Date.now();
