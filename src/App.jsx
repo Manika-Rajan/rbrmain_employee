@@ -582,40 +582,36 @@ export default function App() {
   }, [toast]);
 
   useEffect(() => {
-    if (activeTab === "prebook") loadQuota();
-  }, [activeTab]);
-
-  useEffect(() => {
-  if (!prebookHistory.length) return;
   if (!PREBOOK_STATUS_API) return;
+  if (!prebookHistory.length) return;
 
   let cancelled = false;
 
-  const staleOrPending = prebookHistory.filter((item) => {
-    const st = prettyStatus(item.status);
-    return (
-      item?.reportId &&
-      !["completed", "done", "failed"].includes(st)
-    );
-  });
+  const tick = async () => {
+    const pendingItems = prebookHistory.filter((item) => {
+      const st = prettyStatus(item.status);
+      return item?.reportId && !["completed", "done", "failed"].includes(st);
+    });
 
-  if (!staleOrPending.length) return;
-
-  (async () => {
-    for (const item of staleOrPending) {
+    for (const item of pendingItems) {
       if (cancelled) return;
       try {
         await refreshPrebookItem(item);
       } catch {
-        // keep silent; user can still manually retry by clicking view
+        // silent on purpose
       }
     }
-  })();
+  };
+
+  tick();
+  const id = setInterval(tick, 4000);
 
   return () => {
     cancelled = true;
+    clearInterval(id);
   };
-}, [PREBOOK_STATUS_API, prebookHistory.length]);
+}, [PREBOOK_STATUS_API, prebookHistory]);
+
 
   const activeHistory = activeTab === "instant" ? history : prebookHistory;
   const leftSelId = activeTab === "instant" ? leftId : preLeftId;
@@ -1294,6 +1290,8 @@ export default function App() {
 
     setPrebookLoading(true);
 
+    let historyId = "";
+
     try {
       const templateToSend = deepClone(selectedOrDefaultPrebookTemplate);
       const isDefaultTemplate = !activePrebookTemplate;
@@ -1364,7 +1362,7 @@ export default function App() {
         },
       };
 
-      const historyId = `prebook-${Date.now()}`;
+      historyId = `prebook-${Date.now()}`;
       const newItem = {
         id: historyId,
         createdAt: nowIso(),
@@ -1463,7 +1461,7 @@ export default function App() {
       setError(msg);
       setToast("Pre-book generation failed");
     
-      if (typeof historyId !== "undefined") {
+      if (historyId) {
         upsertPrebookItem(historyId, {
           status: "failed",
           raw: { error: msg },
