@@ -1045,43 +1045,58 @@ export default function App() {
         if (!mountedRef.current) throw new Error("Page closed");
         if (pollAbortRef.current.aborted) throw new Error("Polling aborted");
   
-        const url = new URL(PREBOOK_STATUS_API);
-        url.searchParams.set("reportId", reportId);
+        let data = null;
+        let pollError = null;
   
-        const { res, data } = await fetchJson(url.toString(), {
-          method: "GET",
-          headers: { "Content-Type": "application/json" },
-        });
+        try {
+          data = await fetchPrebookStatus(reportId);
+        } catch (e) {
+          pollError = e;
+        }
   
         if (!mountedRef.current) throw new Error("Page closed");
   
-        setLastApiResponse(data);
+        // IMPORTANT:
+        // During the first ~20 seconds, a 404 / not-found can simply mean
+        // the worker has not yet written the DynamoDB item.
+        if (pollError) {
+          const msg = String(pollError?.message || "").toLowerCase();
+          const isNotReadyYet =
+            msg.includes("404") ||
+            msg.includes("not found") ||
+            msg.includes("report job not found");
   
-        if (!res.ok || !data?.ok) {
-          throw new Error(buildErrorMessage(res, data, "Pre-book status check failed"));
+          if (isNotReadyYet && Date.now() - startedAt < 20000) {
+            setModalSub("Queued • waiting for worker");
+            await new Promise((r) => setTimeout(r, POLL_EVERY_MS));
+            continue;
+          }
+  
+          throw pollError;
         }
   
-        const status = prettyStatus(data.status);
-        const errMsg = data.errorMessage || data.error || data.details || "";
+        setLastApiResponse(data);
+  
+        const status = prettyStatus(data?.status);
+        const errMsg = data?.errorMessage || data?.error || data?.details || "";
   
         upsertPrebookItem(historyId, {
-          reportId: data.reportId || reportId,
-          reportName: data.reportName || undefined,
-          topic: data.topic || undefined,
-          status: data.status || "unknown",
-          s3Key: data.s3Key || data.s3_key || data.pdfKey || data.pdf_key || "",
-          pdfUrl: data.pdfUrl || "",
+          reportId: data?.reportId || reportId,
+          reportName: data?.reportName || undefined,
+          title: data?.reportName || undefined,
+          status: data?.status || "unknown",
+          s3Key: data?.s3Key || data?.pdfKey || "",
           raw: data,
         });
   
-        if (status === "completed" || status === "done") {
-          setModalSub("Finalizing • preparing download link");
+        if (["completed", "done"].includes(status)) {
+          setModalSub("Ready");
           setProgressPct(95);
           return data;
         }
   
         if (status === "failed") {
-          throw new Error(errMsg || "Pre-book report generation failed");
+          throw new Error(errMsg || "Pre-book report failed");
         }
   
         setModalSub(
@@ -1097,7 +1112,9 @@ export default function App() {
         await new Promise((r) => setTimeout(r, POLL_EVERY_MS));
       }
   
-      throw new Error(`Pre-book report is still running after ${Math.round(MAX_WAIT_MS / 1000)}s. Please check again shortly.`);
+      throw new Error(
+        `Pre-book report is still running after ${Math.round(MAX_WAIT_MS / 1000)}s. Please check again shortly.`
+      );
     } finally {
       clearInterval(timer);
     }
