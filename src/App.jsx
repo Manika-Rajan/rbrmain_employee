@@ -421,7 +421,9 @@ export default function App() {
   const PREBOOK_GENERATE_API = import.meta.env.VITE_PREBOOK_GENERATE_API;
   const PREBOOK_STATUS_API = import.meta.env.VITE_PREBOOK_STATUS_API;
   const PREBOOK_PRESIGN_API = import.meta.env.VITE_PREBOOK_PRESIGN_API || PRESIGN_API;
+  const PREBOOK_PUBLISH_API = import.meta.env.VITE_PREBOOK_PUBLISH_API;
 
+  const [publishingIds, setPublishingIds] = useState({});
   const [topic, setTopic] = useState("FMCG market report India");
   const [questions, setQuestions] = useState(DEFAULT_QUESTIONS);
   const [activeTab, setActiveTab] = useState("instant");
@@ -725,6 +727,69 @@ export default function App() {
     return true;
   }
 
+  async function sendPrebookToProduction(item) {
+    if (!PREBOOK_PUBLISH_API) {
+      setError("Missing env var: VITE_PREBOOK_PUBLISH_API");
+      return;
+    }
+  
+    if (!item?.reportId) {
+      setError("Missing reportId for this pre-book report.");
+      return;
+    }
+  
+    const status = prettyStatus(item.status);
+    if (!["completed", "done"].includes(status)) {
+      setToast(`Only completed reports can be sent to production. Current status: ${status}`);
+      return;
+    }
+  
+    setPublishingIds((prev) => ({ ...prev, [item.id]: true }));
+  
+    try {
+      const payload = {
+        reportId: item.reportId,
+        reportName: item.reportName || item.title || item.topic || "",
+        topic: item.topic || "",
+        s3Key: item.s3Key || "",
+        templateId: item.templateId || "",
+        templateName: item.templateName || "",
+        brief: item.brief || null,
+        raw: item.raw || null,
+      };
+  
+      const { res, data } = await fetchJson(PREBOOK_PUBLISH_API, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+  
+      if (!res.ok || !data?.ok) {
+        throw new Error(buildErrorMessage(res, data, "Send to Production failed"));
+      }
+  
+      upsertPrebookItem(item.id, {
+        productionStatus: data.productionStatus || "published",
+        productionSlug: data.slug || "",
+        productionFullKey: data.full_key || "",
+        productionPreviewKey: data.preview_key || "",
+        sentToProductionAt: data.sentAt || nowIso(),
+        raw: {
+          ...(item.raw || {}),
+          production: data,
+        },
+      });
+  
+      setToast("Sent to Production ✅");
+    } catch (e) {
+      setError(e?.message || "Send to Production failed");
+      setToast("Send to Production failed");
+    } finally {
+      setPublishingIds((prev) => ({ ...prev, [item.id]: false }));
+    }
+  }
+
+  
   async function loadQuota() {
     setQuotaError("");
     if (!ensurePrebookQuotaEnv()) return;
