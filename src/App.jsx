@@ -3199,7 +3199,17 @@ export default function App() {
   );
 }
 
-function HistoryTable({ activeTab, filteredHistory, copyToClipboard, removeItem, setLeft, setRight }) {
+
+function HistoryTable({
+  activeTab,
+  filteredHistory,
+  copyToClipboard,
+  removeItem,
+  setLeft,
+  setRight,
+  sendPrebookToProduction,
+  publishingIds,
+}) {
   return (
     <div className="tableWrap">
       <table className="table">
@@ -3209,7 +3219,7 @@ function HistoryTable({ activeTab, filteredHistory, copyToClipboard, removeItem,
             <th>Topic</th>
             <th style={{ width: 140 }}>{activeTab === "instant" ? "Instant" : "Pre-book"}</th>
             <th style={{ width: 105 }}>Status</th>
-            <th style={{ width: 320 }}>Actions</th>
+            <th style={{ width: 380 }}>Actions</th>
           </tr>
         </thead>
         <tbody>
@@ -3217,20 +3227,37 @@ function HistoryTable({ activeTab, filteredHistory, copyToClipboard, removeItem,
             const dt = h.createdAt ? new Date(h.createdAt) : null;
             const timeStr = dt ? dt.toLocaleString() : "-";
             const st = prettyStatus(h.status);
+
+            const canSend =
+              activeTab === "prebook" &&
+              ["completed", "done"].includes(st) &&
+              h.productionStatus !== "published";
+
             return (
               <tr key={h.id} className="row">
                 <td className="mono">{timeStr}</td>
+
                 <td>
                   <div className="titleCell">{h.title || h.topic}</div>
                   <div className="mutedSmall">{h.topic}</div>
                 </td>
+
                 <td className="mono">
                   <div className="monoRow">
-                    <span>{activeTab === "instant" ? h.instantId || "-" : h.reportId || "-"}</span>
+                    <span>
+                      {activeTab === "instant"
+                        ? h.instantId || "-"
+                        : h.reportId || "-"}
+                    </span>
+
                     {(activeTab === "instant" ? h.instantId : h.reportId) ? (
                       <button
                         className="miniBtn"
-                        onClick={() => copyToClipboard(activeTab === "instant" ? h.instantId : h.reportId)}
+                        onClick={() =>
+                          copyToClipboard(
+                            activeTab === "instant" ? h.instantId : h.reportId
+                          )
+                        }
                         type="button"
                       >
                         Copy
@@ -3238,20 +3265,73 @@ function HistoryTable({ activeTab, filteredHistory, copyToClipboard, removeItem,
                     ) : null}
                   </div>
                 </td>
+
                 <td>
-                  <span className={clsx("badge", `st-${st}`)}>{h.status || "-"}</span>
+                  <span className={clsx("badge", `st-${st}`)}>
+                    {h.status || "-"}
+                  </span>
                 </td>
+
                 <td>
                   <div className="rowActions">
-                    <button className="chip" onClick={() => setLeft(h.id)} type="button">View Left</button>
-                    <button className="chip" onClick={() => setRight(h.id)} type="button">View Right</button>
+                    <button
+                      className="chip"
+                      onClick={() => setLeft(h.id)}
+                      type="button"
+                    >
+                      View Left
+                    </button>
+
+                    <button
+                      className="chip"
+                      onClick={() => setRight(h.id)}
+                      type="button"
+                    >
+                      View Right
+                    </button>
+
                     {h.pdfUrl ? (
-                      <a className="chipLink" href={h.pdfUrl} target="_blank" rel="noreferrer">Open</a>
+                      <a
+                        className="chipLink"
+                        href={h.pdfUrl}
+                        target="_blank"
+                        rel="noreferrer"
+                      >
+                        Open
+                      </a>
                     ) : (
                       <span className="chipDisabled">No link</span>
                     )}
-                    <button className="chipDanger" onClick={() => removeItem(h.id)} type="button">Remove</button>
+
+                    {activeTab === "prebook" ? (
+                      <button
+                        className="chip"
+                        disabled={!canSend || publishingIds?.[h.id]}
+                        onClick={() => sendPrebookToProduction(h)}
+                        type="button"
+                      >
+                        {h.productionStatus === "published"
+                          ? "Sent to Production"
+                          : publishingIds?.[h.id]
+                          ? "Sending..."
+                          : "Send to Production"}
+                      </button>
+                    ) : null}
+
+                    <button
+                      className="chipDanger"
+                      onClick={() => removeItem(h.id)}
+                      type="button"
+                    >
+                      Remove
+                    </button>
                   </div>
+
+                  {activeTab === "prebook" && h.productionSlug ? (
+                    <div className="mutedSmall" style={{ marginTop: 6 }}>
+                      Production slug: <span className="mono">{h.productionSlug}</span>
+                    </div>
+                  ) : null}
                 </td>
               </tr>
             );
@@ -3261,6 +3341,7 @@ function HistoryTable({ activeTab, filteredHistory, copyToClipboard, removeItem,
     </div>
   );
 }
+
 
 function GroupedHistoryTable({
   activeTab,
