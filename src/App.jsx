@@ -3140,6 +3140,8 @@ export default function App() {
                     removeItem={removeItem}
                     setLeft={setLeft}
                     setRight={setRight}
+                    sendPrebookToProduction={sendPrebookToProduction}
+                    publishingIds={publishingIds}
                   />
                 ) : (
                   <HistoryTable
@@ -3352,6 +3354,8 @@ function GroupedHistoryTable({
   removeItem,
   setLeft,
   setRight,
+  sendPrebookToProduction,
+  publishingIds,
 }) {
   return (
     <div style={{ display: "grid", gap: 12 }}>
