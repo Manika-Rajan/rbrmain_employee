@@ -421,7 +421,7 @@ export default function App() {
   const PREBOOK_GENERATE_API = import.meta.env.VITE_PREBOOK_GENERATE_API;
   const PREBOOK_STATUS_API = import.meta.env.VITE_PREBOOK_STATUS_API;
   const PREBOOK_PRESIGN_API = import.meta.env.VITE_PREBOOK_PRESIGN_API || PRESIGN_API;
-  const PREBOOK_PUBLISH_API = import.meta.env.VITE_PREBOOK_PUBLISH_API;
+  const PREBOOK_PUBLISH_API = "https://jp1bupouyl.execute-api.ap-south-1.amazonaws.com/prod/prebook/publish";
 
   const [publishingIds, setPublishingIds] = useState({});
   const [topic, setTopic] = useState("FMCG market report India");
