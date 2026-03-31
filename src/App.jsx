@@ -16,7 +16,7 @@ export default function App() {
         reportId: "test123",
         reportName: "Test Report",
         topic: "API Test",
-        s3Key: "test/file.pdf",
+        s3Key: "2026-03-31/9975a687e90e.pdf",
       };
 
       const res = await fetch(API_URL, {
