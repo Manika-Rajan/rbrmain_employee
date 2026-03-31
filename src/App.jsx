@@ -3466,6 +3466,8 @@ function GroupedHistoryTable({
                   removeItem={removeItem}
                   setLeft={setLeft}
                   setRight={setRight}
+                  sendPrebookToProduction={sendPrebookToProduction}
+                  publishingIds={publishingIds}
                 />
               </div>
             ) : null}
