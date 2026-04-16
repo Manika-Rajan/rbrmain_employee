@@ -1801,14 +1801,19 @@ export default function App() {
       const { res, data } = await fetchJson(SUGGEST_API, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ query: q }),
+        body: JSON.stringify({ q, limit: 3 }),
       });
 
       if (!res.ok) {
         throw new Error(buildErrorMessage(res, data, "Suggest API failed"));
       }
 
-      setSuggestResults(normalizeSuggestResults(data));
+      const parsed = (data && typeof data.body === "string") ? JSON.parse(data.body) : data;
+      const items = normalizeSuggestResults(parsed);
+      setSuggestResults(items);
+      if (!items.length && parsed?.hint) {
+        setSuggestError(parsed.hint);
+      }
     } catch (e) {
       setSuggestResults([]);
       setSuggestError(e?.message || "Failed to fetch suggestions");
