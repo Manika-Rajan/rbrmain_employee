@@ -422,12 +422,16 @@ export default function App() {
   const PREBOOK_STATUS_API = import.meta.env.VITE_PREBOOK_STATUS_API;
   const PREBOOK_PRESIGN_API = import.meta.env.VITE_PREBOOK_PRESIGN_API || PRESIGN_API;
   const PREBOOK_PUBLISH_API = "https://jp1bupouyl.execute-api.ap-south-1.amazonaws.com/prod/prebook/publish";
+  const CATALOG_API = import.meta.env.VITE_CATALOG_API || "https://example.com/rbr/catalog/list";
+  const SUGGEST_API = "https://vtwyu7hv50.execute-api.ap-south-1.amazonaws.com/default/suggest";
+  const SUGGEST_PREVIEW_API = "https://vtwyu7hv50.execute-api.ap-south-1.amazonaws.com/default/RBR_report_pre-signed_URL";
 
   const [publishingIds, setPublishingIds] = useState({});
   const [topic, setTopic] = useState("FMCG market report India");
   const [questions, setQuestions] = useState(DEFAULT_QUESTIONS);
   const [activeTab, setActiveTab] = useState("instant");
   const isPrebook = activeTab === "prebook";
+  const isCatalog = activeTab === "catalog";
 
   const theme = useMemo(() => {
     return isPrebook
@@ -511,6 +515,15 @@ export default function App() {
 
   const [historyQuery, setHistoryQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
+  const [catalogSearch, setCatalogSearch] = useState("");
+  const [catalogLoading, setCatalogLoading] = useState(false);
+  const [catalogError, setCatalogError] = useState("");
+  const [catalogItems, setCatalogItems] = useState([]);
+  const [catalogMeta, setCatalogMeta] = useState({ total: 0, source: "" });
+  const [suggestTesterQuery, setSuggestTesterQuery] = useState("");
+  const [suggestLoading, setSuggestLoading] = useState(false);
+  const [suggestError, setSuggestError] = useState("");
+  const [suggestResults, setSuggestResults] = useState([]);
   const [toast, setToast] = useState("");
   const [showDebug, setShowDebug] = useState(false);
   const [expandedDateGroups, setExpandedDateGroups] = useState({});
@@ -614,10 +627,14 @@ export default function App() {
   };
 }, [PREBOOK_STATUS_API, prebookHistory]);
 
+  useEffect(() => {
+    if (activeTab !== "catalog") return;
+    loadCatalog();
+  }, [activeTab]);
 
-  const activeHistory = activeTab === "instant" ? history : prebookHistory;
-  const leftSelId = activeTab === "instant" ? leftId : preLeftId;
-  const rightSelId = activeTab === "instant" ? rightId : preRightId;
+  const activeHistory = activeTab === "instant" ? history : activeTab === "prebook" ? prebookHistory : [];
+  const leftSelId = activeTab === "instant" ? leftId : activeTab === "prebook" ? preLeftId : null;
+  const rightSelId = activeTab === "instant" ? rightId : activeTab === "prebook" ? preRightId : null;
 
   const leftItem = useMemo(
     () => activeHistory.find((x) => x.id === leftSelId) || null,
@@ -1687,6 +1704,147 @@ export default function App() {
     }
   }
 
+  function normalizeCatalogItems(payload) {
+    const rawItems = Array.isArray(payload)
+      ? payload
+      : Array.isArray(payload?.items)
+      ? payload.items
+      : Array.isArray(payload?.results)
+      ? payload.results
+      : Array.isArray(payload?.data)
+      ? payload.data
+      : [];
+
+    return rawItems.map((item, index) => ({
+      id: item?.id || item?.reportId || item?.slug || item?.title || `catalog-${index}` ,
+      title: item?.title || item?.reportName || item?.topic || "Untitled report",
+      slug: item?.slug || item?.reportSlug || "",
+      full_key: item?.full_key || item?.fullKey || item?.file_key || item?.fileKey || "",
+      preview_key: item?.preview_key || item?.previewKey || item?.preview_file_key || "",
+      reportId: item?.reportId || item?.report_id || "",
+      topic: item?.topic || "",
+      keywords: Array.isArray(item?.keywords) ? item.keywords : [],
+      sentAt: item?.sentAt || item?.publishedAt || item?.createdAt || item?.updatedAt || "",
+      raw: item,
+    }));
+  }
+
+  function normalizeSuggestResults(payload) {
+    const rawItems = Array.isArray(payload)
+      ? payload
+      : Array.isArray(payload?.items)
+      ? payload.items
+      : Array.isArray(payload?.suggestions)
+      ? payload.suggestions
+      : Array.isArray(payload?.results)
+      ? payload.results
+      : [];
+
+    return rawItems.map((item, index) => ({
+      id: item?.id || item?.slug || item?.title || item?.name || `suggest-${index}` ,
+      title: item?.title || item?.name || item?.reportName || item?.topic || "Untitled suggestion",
+      slug: item?.slug || item?.reportSlug || "",
+      preview_key: item?.preview_key || item?.previewKey || item?.file_key || item?.fileKey || "",
+      full_key: item?.full_key || item?.fullKey || "",
+      keywords: Array.isArray(item?.keywords) ? item.keywords : [],
+      raw: item,
+    }));
+  }
+
+  async function loadCatalog(searchTerm = catalogSearch) {
+    setCatalogLoading(true);
+    setCatalogError("");
+    try {
+      const payload = {
+        query: String(searchTerm || "").trim(),
+        limit: 100,
+      };
+
+      const { res, data } = await fetchJson(CATALOG_API, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+
+      if (!res.ok) {
+        throw new Error(buildErrorMessage(res, data, "Catalog API failed"));
+      }
+
+      const items = normalizeCatalogItems(data);
+      setCatalogItems(items);
+      setCatalogMeta({
+        total: Number(data?.total || items.length || 0),
+        source: data?.source || "catalog_api",
+      });
+    } catch (e) {
+      setCatalogItems([]);
+      setCatalogMeta({ total: 0, source: "" });
+      setCatalogError(e?.message || "Failed to load catalog");
+    } finally {
+      setCatalogLoading(false);
+    }
+  }
+
+  async function runSuggestionTest(queryOverride) {
+    const q = String(queryOverride ?? suggestTesterQuery ?? "").trim();
+    setSuggestTesterQuery(q);
+
+    if (!q) {
+      setSuggestResults([]);
+      setSuggestError("Please enter a query to test suggestions.");
+      return;
+    }
+
+    setSuggestLoading(true);
+    setSuggestError("");
+    try {
+      const { res, data } = await fetchJson(SUGGEST_API, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ query: q }),
+      });
+
+      if (!res.ok) {
+        throw new Error(buildErrorMessage(res, data, "Suggest API failed"));
+      }
+
+      setSuggestResults(normalizeSuggestResults(data));
+    } catch (e) {
+      setSuggestResults([]);
+      setSuggestError(e?.message || "Failed to fetch suggestions");
+    } finally {
+      setSuggestLoading(false);
+    }
+  }
+
+  async function openCatalogPreview(item) {
+    const previewKey = item?.preview_key || item?.raw?.preview_key || item?.raw?.previewKey || "";
+    if (!previewKey) {
+      setToast("No preview_key on this item");
+      return;
+    }
+
+    try {
+      const { res, data } = await fetchJson(SUGGEST_PREVIEW_API, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ file_key: previewKey }),
+      });
+
+      if (!res.ok || data?.ok === false) {
+        throw new Error(buildErrorMessage(res, data, "Preview presign failed"));
+      }
+
+      const previewUrl =
+        data?.presignedUrl || data?.presigned_url || data?.url || data?.presignedURL || "";
+
+      if (!previewUrl) throw new Error("Preview URL missing");
+      window.open(withFragmentBuster(previewUrl), "_blank", "noopener,noreferrer");
+    } catch (e) {
+      setCatalogError(e?.message || "Could not open preview");
+    }
+  }
+
   const leftStatus = prettyStatus(leftItem?.status);
   const rightStatus = prettyStatus(rightItem?.status);
 
@@ -2480,6 +2638,25 @@ export default function App() {
               >
                 Pre-book Report Work Desk
               </button>
+              <button
+                type="button"
+                className="chipPill"
+                onClick={() => setActiveTab("catalog")}
+                style={{
+                  border:
+                    activeTab === "catalog"
+                      ? "1px solid rgba(34,197,94,0.40)"
+                      : "1px solid rgba(255,255,255,0.14)",
+                  background:
+                    activeTab === "catalog" ? "rgba(34,197,94,0.16)" : "rgba(255,255,255,0.08)",
+                  color:
+                    activeTab === "catalog"
+                      ? "rgba(220,252,231,0.98)"
+                      : "rgba(255,255,255,0.88)",
+                }}
+              >
+                Catalog & Suggestions
+              </button>
             </div>
 
             {activeTab === "instant" ? (
@@ -3038,8 +3215,8 @@ export default function App() {
           </>
         ) : null}
 
-        <div className={clsx("body", (leftHidden || isPrebook) && "bodyFull")}>
-          {!leftHidden && !isPrebook ? (
+        <div className={clsx("body", (leftHidden || isPrebook || isCatalog) && "bodyFull")}>
+          {!leftHidden && !isPrebook && !isCatalog ? (
             <aside className="left">
               <div className="panelScroll">
                 <div className="card glass">
@@ -3142,7 +3319,25 @@ export default function App() {
           ) : null}
 
           <main className="right">
-            {isPrebook ? (
+            {isCatalog ? (
+              <CatalogSuggestionsPanel
+                catalogSearch={catalogSearch}
+                setCatalogSearch={setCatalogSearch}
+                loadCatalog={loadCatalog}
+                catalogLoading={catalogLoading}
+                catalogError={catalogError}
+                catalogItems={catalogItems}
+                catalogMeta={catalogMeta}
+                suggestTesterQuery={suggestTesterQuery}
+                setSuggestTesterQuery={setSuggestTesterQuery}
+                runSuggestionTest={runSuggestionTest}
+                suggestLoading={suggestLoading}
+                suggestError={suggestError}
+                suggestResults={suggestResults}
+                openCatalogPreview={openCatalogPreview}
+                copyToClipboard={copyToClipboard}
+              />
+            ) : isPrebook ? (
               <div className="card glass" style={{ border: `1px solid ${theme.accentBorder}`, background: theme.panelBg }}>
                 <div className="cardTitleRow">
                   <div className="cardTitle">Generated Reports (Pre-book)</div>
@@ -3215,29 +3410,230 @@ export default function App() {
               </div>
             ) : null}
 
-            <div className="compareHeader">
-              <div className="compareTitleRow">
-                <div className="compareTitle">Compare PDFs</div>
-                <div className="compareBadges">
-                  <span className={clsx("miniStatus", `st-${leftStatus}`)}>Left: {leftItem?.status || "none"}</span>
-                  <span className={clsx("miniStatus", `st-${rightStatus}`)}>Right: {rightItem?.status || "none"}</span>
+            {!isCatalog ? (
+              <>
+                <div className="compareHeader">
+                  <div className="compareTitleRow">
+                    <div className="compareTitle">Compare PDFs</div>
+                    <div className="compareBadges">
+                      <span className={clsx("miniStatus", `st-${leftStatus}`)}>Left: {leftItem?.status || "none"}</span>
+                      <span className={clsx("miniStatus", `st-${rightStatus}`)}>Right: {rightItem?.status || "none"}</span>
+                    </div>
+                  </div>
+                  <div className="compareHint">
+                    Choose “View Left / View Right” from the table. No cropping — panes fit the screen.
+                  </div>
                 </div>
-              </div>
-              <div className="compareHint">
-                Choose “View Left / View Right” from the table. No cropping — panes fit the screen.
-              </div>
-            </div>
 
-            <div className="pdfGrid">
-              <PdfPane side="Left" item={leftItem} emptyIcon="⬅️" emptyTitle="Select a Left report" />
-              <PdfPane side="Right" item={rightItem} emptyIcon="➡️" emptyTitle="Select a Right report" />
-            </div>
+                <div className="pdfGrid">
+                  <PdfPane side="Left" item={leftItem} emptyIcon="⬅️" emptyTitle="Select a Left report" />
+                  <PdfPane side="Right" item={rightItem} emptyIcon="➡️" emptyTitle="Select a Right report" />
+                </div>
+              </>
+            ) : null}
           </main>
         </div>
 
         <footer className="footer">
-          Tip: Generate 2–3 reports with small prompt changes and compare output quality.
+          {isCatalog
+            ? "Tip: Use this tab to compare catalog records against live /suggest output and improve relevance."            : "Tip: Generate 2–3 reports with small prompt changes and compare output quality."}
         </footer>
+      </div>
+    </div>
+  );
+}
+
+
+function CatalogSuggestionsPanel({
+  catalogSearch,
+  setCatalogSearch,
+  loadCatalog,
+  catalogLoading,
+  catalogError,
+  catalogItems,
+  catalogMeta,
+  suggestTesterQuery,
+  setSuggestTesterQuery,
+  runSuggestionTest,
+  suggestLoading,
+  suggestError,
+  suggestResults,
+  openCatalogPreview,
+  copyToClipboard,
+}) {
+  return (
+    <div style={{ display: "grid", gap: 16 }}>
+      <div
+        className="card glass"
+        style={{
+          border: "1px solid rgba(34,197,94,0.28)",
+          background: "rgba(7,18,12,0.55)",
+        }}
+      >
+        <div className="cardTitleRow">
+          <div className="cardTitle">Published Reports Catalog</div>
+          <div className="mutedSmall">{catalogMeta?.total || catalogItems.length} items</div>
+        </div>
+
+        <div className="historyTools" style={{ marginTop: 12 }}>
+          <input
+            className="input inputSm"
+            value={catalogSearch}
+            onChange={(e) => setCatalogSearch(e.target.value)}
+            placeholder="Search title / slug / keyword..."
+            onKeyDown={(e) => {
+              if (e.key === "Enter") loadCatalog();
+            }}
+          />
+          <button className="btnSecondary" type="button" onClick={() => loadCatalog()}>
+            {catalogLoading ? "Loading..." : "Refresh Catalog"}
+          </button>
+        </div>
+
+        {catalogError ? <div className="errorBox">Error: {catalogError}</div> : null}
+
+        {!catalogItems.length && !catalogLoading ? (
+          <div className="empty fancyEmpty">
+            <div className="emptyIcon">🗂️</div>
+            <div className="emptyTitle">No catalog items found</div>
+            <div className="mutedSmall">Update VITE_CATALOG_API after you connect your new Lambda.</div>
+          </div>
+        ) : (
+          <div className="tableWrap" style={{ marginTop: 12 }}>
+            <table className="table">
+              <thead>
+                <tr>
+                  <th>Title</th>
+                  <th style={{ width: 170 }}>Slug</th>
+                  <th>Keywords</th>
+                  <th style={{ width: 165 }}>Published</th>
+                  <th style={{ width: 280 }}>Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {catalogItems.map((item) => (
+                  <tr key={item.id} className="row">
+                    <td>
+                      <div className="titleCell">{item.title || "-"}</div>
+                      <div className="mutedSmall mono">{item.reportId || item.full_key || "-"}</div>
+                    </td>
+                    <td className="mono">{item.slug || "-"}</td>
+                    <td>
+                      <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                        {(item.keywords || []).length ? (
+                          item.keywords.slice(0, 6).map((kw, idx) => (
+                            <span key={`${item.id}-kw-${idx}`} className="chipDisabled">
+                              {kw}
+                            </span>
+                          ))
+                        ) : (
+                          <span className="mutedSmall">No keywords</span>
+                        )}
+                      </div>
+                    </td>
+                    <td className="mono">
+                      {item.sentAt ? new Date(item.sentAt).toLocaleString() : "-"}
+                    </td>
+                    <td>
+                      <div className="rowActions">
+                        <button className="chip" type="button" onClick={() => runSuggestionTest(item.title || item.slug || "") }>
+                          Test This
+                        </button>
+                        <button className="chip" type="button" onClick={() => openCatalogPreview(item)}>
+                          Preview
+                        </button>
+                        <button className="chip" type="button" onClick={() => copyToClipboard(item.slug || item.title || "") }>
+                          Copy
+                        </button>
+                      </div>
+                      {item.preview_key ? (
+                        <div className="mutedSmall" style={{ marginTop: 6 }}>
+                          preview_key: <span className="mono">{item.preview_key}</span>
+                        </div>
+                      ) : null}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
+      <div
+        className="card glass"
+        style={{
+          border: "1px solid rgba(34,197,94,0.28)",
+          background: "rgba(7,18,12,0.55)",
+        }}
+      >
+        <div className="cardTitleRow">
+          <div className="cardTitle">Suggestion Tester</div>
+          <div className="mutedSmall">Uses the live /suggest API</div>
+        </div>
+
+        <div className="historyTools" style={{ marginTop: 12 }}>
+          <input
+            className="input inputSm"
+            value={suggestTesterQuery}
+            onChange={(e) => setSuggestTesterQuery(e.target.value)}
+            placeholder="Type the same query a frontend user would type..."
+            onKeyDown={(e) => {
+              if (e.key === "Enter") runSuggestionTest();
+            }}
+          />
+          <button className="btnSecondary" type="button" onClick={() => runSuggestionTest()}>
+            {suggestLoading ? "Checking..." : "Test Suggestions"}
+          </button>
+        </div>
+
+        {suggestError ? <div className="errorBox">Error: {suggestError}</div> : null}
+
+        {!suggestResults.length && !suggestLoading ? (
+          <div className="empty fancyEmpty" style={{ marginTop: 12 }}>
+            <div className="emptyIcon">🔎</div>
+            <div className="emptyTitle">No suggestion results yet</div>
+            <div className="mutedSmall">Run a query to see exactly what the public frontend would receive.</div>
+          </div>
+        ) : (
+          <div style={{ display: "grid", gap: 10, marginTop: 14 }}>
+            {suggestResults.map((item) => (
+              <div
+                key={item.id}
+                className="card"
+                style={{
+                  border: "1px solid rgba(255,255,255,0.10)",
+                  background: "rgba(255,255,255,0.03)",
+                }}
+              >
+                <div className="cardTitleRow">
+                  <div>
+                    <div className="titleCell">{item.title}</div>
+                    <div className="mutedSmall mono">{item.slug || item.preview_key || "-"}</div>
+                  </div>
+                  <div className="rowActions">
+                    <button className="chip" type="button" onClick={() => openCatalogPreview(item)}>
+                      Preview
+                    </button>
+                    <button className="chip" type="button" onClick={() => copyToClipboard(item.preview_key || item.slug || item.title || "") }>
+                      Copy
+                    </button>
+                  </div>
+                </div>
+
+                {(item.keywords || []).length ? (
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 10 }}>
+                    {item.keywords.map((kw, idx) => (
+                      <span key={`${item.id}-suggest-kw-${idx}`} className="chipDisabled">
+                        {kw}
+                      </span>
+                    ))}
+                  </div>
+                ) : null}
+              </div>
+            ))}
+          </div>
+        )}
       </div>
     </div>
   );
