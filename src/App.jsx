@@ -153,6 +153,60 @@ function nowIso() {
   return new Date().toISOString();
 }
 
+function getDateFolderFromIso(value) {
+  const d = value ? new Date(value) : new Date();
+  if (Number.isNaN(d.getTime())) return new Date().toISOString().slice(0, 10);
+
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
+function resolvePrebookPdfKey(item = {}, statusData = {}) {
+  const reportId =
+    statusData.reportId ||
+    statusData.report_id ||
+    statusData.prebookId ||
+    statusData.id ||
+    item.reportId ||
+    item.report_id ||
+    item.prebookId ||
+    item.id ||
+    "";
+
+  const directKey =
+    statusData.s3Key ||
+    statusData.pdfKey ||
+    statusData.s3_key ||
+    statusData.pdf_key ||
+    statusData.key ||
+    item.s3Key ||
+    item.pdfKey ||
+    item.s3_key ||
+    item.pdf_key ||
+    item?.raw?.s3Key ||
+    item?.raw?.pdfKey ||
+    item?.raw?.s3_key ||
+    item?.raw?.pdf_key ||
+    "";
+
+  if (directKey) return directKey;
+  if (!reportId) return "";
+
+  const folder = getDateFolderFromIso(
+    statusData.createdAt ||
+      statusData.created_at ||
+      statusData.completedAt ||
+      statusData.updatedAt ||
+      item.createdAt ||
+      item.created_at ||
+      item.updatedAt
+  );
+
+  return `prebook/pdf/${folder}/${reportId}.pdf`;
+}
+
 function formatReportTimestamp(date = new Date()) {
   try {
     return date.toLocaleString("en-IN", {
@@ -764,14 +818,7 @@ export default function App() {
     setPublishingIds((prev) => ({ ...prev, [item.id]: true }));
 
     try {
-      const resolvedS3Key =
-        item.s3Key ||
-        item.pdfKey ||
-        item?.raw?.s3Key ||
-        item?.raw?.pdfKey ||
-        item?.raw?.s3_key ||
-        item?.raw?.pdf_key ||
-        "";
+      const resolvedS3Key = resolvePrebookPdfKey(item, item?.raw || {});
 
       if (!resolvedS3Key) {
         throw new Error("Missing s3Key/pdfKey for this pre-book report.");
@@ -1044,8 +1091,8 @@ export default function App() {
       title: statusData.reportName || item.title || item.reportName,
       topic: statusData.topic || item.topic,
       status: statusData.status || item.status || "unknown",
-      s3Key: statusData.s3Key || statusData.pdfKey || item.s3Key || item.pdfKey || "",
-      pdfKey: statusData.pdfKey || statusData.s3Key || item.pdfKey || item.s3Key || "",
+      s3Key: resolvePrebookPdfKey(item, statusData),
+      pdfKey: resolvePrebookPdfKey(item, statusData),
       pdfUrl: statusData.pdfUrl || item.pdfUrl || "",
       raw: statusData,
     };
@@ -1202,8 +1249,8 @@ export default function App() {
           reportName: data?.reportName || undefined,
           title: data?.reportName || undefined,
           status: data?.status || "unknown",
-          s3Key: data?.s3Key || data?.pdfKey || "",
-          pdfKey: data?.pdfKey || data?.s3Key || "",
+            s3Key: resolvePrebookPdfKey({ id: historyId, reportId, createdAt: nowIso() }, data || {}),
+          pdfKey: resolvePrebookPdfKey({ id: historyId, reportId, createdAt: nowIso() }, data || {}),
           raw: data,
         });
   
@@ -1271,14 +1318,16 @@ export default function App() {
     if (!["completed", "done"].includes(status)) {
       throw new Error(`This pre-book report is still ${status}.`);
     }
+
+    const resolvedPdfKey = resolvePrebookPdfKey(item, item.raw || {});
     
-    if (!item.s3Key && !item.reportId) {
+    if (!resolvedPdfKey && !item.reportId) {
       throw new Error("No s3Key/reportId available for this pre-book report.");
     }
 
     const url = new URL(PREBOOK_PRESIGN_API);
 
-    if (item.s3Key) url.searchParams.set("s3Key", item.s3Key);
+    if (resolvedPdfKey) url.searchParams.set("s3Key", resolvedPdfKey);
     if (item.reportId) url.searchParams.set("reportId", item.reportId);
 
     const { res, data } = await fetchJson(url.toString(), {
@@ -1298,18 +1347,19 @@ export default function App() {
     }
 
     const freshUrl = withFragmentBuster(presignedUrl);
+    const finalKey = data?.s3Key || data?.pdfKey || data?.s3_key || data?.pdf_key || resolvedPdfKey || "";
 
     upsertPrebookItem(item.id, {
       pdfUrl: freshUrl,
-      s3Key: data?.s3Key || data?.pdfKey || item.s3Key || item.pdfKey || "",
-      pdfKey: data?.pdfKey || data?.s3Key || item.pdfKey || item.s3Key || "",
+      s3Key: finalKey,
+      pdfKey: finalKey,
     });
 
     return {
       ...item,
       pdfUrl: freshUrl,
-      s3Key: data?.s3Key || data?.pdfKey || item.s3Key || item.pdfKey || "",
-      pdfKey: data?.pdfKey || data?.s3Key || item.pdfKey || item.s3Key || "",
+      s3Key: finalKey,
+      pdfKey: finalKey,
     };
   }
 
@@ -1559,12 +1609,17 @@ export default function App() {
       const statusData = await pollPrebookStatusUntilDone({ reportId, historyId });
       if (!statusData || !mountedRef.current) return;
       
+      const resolvedStatusPdfKey = resolvePrebookPdfKey(
+        { id: historyId, reportId, createdAt: nowIso() },
+        statusData || {}
+      );
+
       const finalItem = {
         id: historyId,
         reportId: statusData.reportId || reportId,
         status: statusData.status || "completed",
-        s3Key: statusData.s3Key || statusData.pdfKey || "",
-        pdfKey: statusData.pdfKey || statusData.s3Key || "",
+        s3Key: resolvedStatusPdfKey,
+        pdfKey: resolvedStatusPdfKey,
       };
       
       let freshPdfUrl = "";
@@ -1576,8 +1631,8 @@ export default function App() {
           ...finalItem,
           reportId: statusData.reportId || reportId,
           status: statusData.status || "completed",
-          s3Key: statusData.s3Key || statusData.pdfKey || finalItem.s3Key || finalItem.pdfKey || "",
-          pdfKey: statusData.pdfKey || statusData.s3Key || finalItem.pdfKey || finalItem.s3Key || "",
+          s3Key: resolvedStatusPdfKey || finalItem.s3Key || finalItem.pdfKey || "",
+          pdfKey: resolvedStatusPdfKey || finalItem.pdfKey || finalItem.s3Key || "",
         });
         freshPdfUrl = refreshed?.pdfUrl || "";
       }
@@ -1587,8 +1642,8 @@ export default function App() {
         title: statusData.reportName || reportDisplayName,
         reportId: statusData.reportId || reportId,
         status: statusData.status || "completed",
-        s3Key: statusData.s3Key || statusData.pdfKey || "",
-        pdfKey: statusData.pdfKey || statusData.s3Key || "",
+        s3Key: resolvedStatusPdfKey,
+        pdfKey: resolvedStatusPdfKey,
         pdfUrl: freshPdfUrl || "",
         raw: statusData,
       });
