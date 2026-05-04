@@ -422,7 +422,7 @@ export default function App() {
   const PREBOOK_STATUS_API = import.meta.env.VITE_PREBOOK_STATUS_API;
   const PREBOOK_PRESIGN_API = import.meta.env.VITE_PREBOOK_PRESIGN_API || PRESIGN_API;
   const PREBOOK_PUBLISH_API = "https://jp1bupouyl.execute-api.ap-south-1.amazonaws.com/prod/prebook/publish";
-  const CATALOG_API = import.meta.env.VITE_CATALOG_API || "https://example.com/rbr/catalog/list";
+  const CATALOG_API = import.meta.env.VITE_CATALOG_API || "";
   const SUGGEST_API = "https://vtwyu7hv50.execute-api.ap-south-1.amazonaws.com/default/suggest";
   const SUGGEST_PREVIEW_API = "https://vtwyu7hv50.execute-api.ap-south-1.amazonaws.com/default/RBR_report_pre-signed_URL";
 
@@ -1754,9 +1754,44 @@ export default function App() {
   async function loadCatalog(searchTerm = catalogSearch) {
     setCatalogLoading(true);
     setCatalogError("");
+
+    const q = String(searchTerm || "").trim();
+    const hasCatalogApi = Boolean(CATALOG_API && !String(CATALOG_API).includes("example.com"));
+
     try {
+      // Until a dedicated catalog-list Lambda is connected, this tab can still be useful
+      // by reading from the live /suggest API that already scans rbrmain-finalReportsCatalog.
+      if (!hasCatalogApi) {
+        if (!q) {
+          setCatalogItems([]);
+          setCatalogMeta({ total: 0, source: "live_suggest_fallback" });
+          setCatalogError("Enter a search term to inspect catalog records using the live /suggest API, or set VITE_CATALOG_API for full catalog listing.");
+          return;
+        }
+
+        const { res, data } = await fetchJson(SUGGEST_API, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ q, limit: 25 }),
+        });
+
+        if (!res.ok) {
+          throw new Error(buildErrorMessage(res, data, "Suggest API catalog fallback failed"));
+        }
+
+        const parsed = data && typeof data.body === "string" ? JSON.parse(data.body) : data;
+        const items = normalizeCatalogItems(parsed);
+        setCatalogItems(items);
+        setCatalogMeta({
+          total: Number(parsed?.total || items.length || 0),
+          source: "live_suggest_fallback",
+        });
+        return;
+      }
+
       const payload = {
-        query: String(searchTerm || "").trim(),
+        query: q,
+        q,
         limit: 100,
       };
 
@@ -1770,11 +1805,12 @@ export default function App() {
         throw new Error(buildErrorMessage(res, data, "Catalog API failed"));
       }
 
-      const items = normalizeCatalogItems(data);
+      const parsed = data && typeof data.body === "string" ? JSON.parse(data.body) : data;
+      const items = normalizeCatalogItems(parsed);
       setCatalogItems(items);
       setCatalogMeta({
-        total: Number(data?.total || items.length || 0),
-        source: data?.source || "catalog_api",
+        total: Number(parsed?.total || items.length || 0),
+        source: parsed?.source || "catalog_api",
       });
     } catch (e) {
       setCatalogItems([]);
