@@ -207,6 +207,27 @@ function resolvePrebookPdfKey(item = {}, statusData = {}) {
   return `prebook/pdf/${folder}/${reportId}.pdf`;
 }
 
+function hasPrebookPdfReference(statusData = {}) {
+  return Boolean(
+    statusData?.s3Key ||
+      statusData?.pdfKey ||
+      statusData?.s3_key ||
+      statusData?.pdf_key ||
+      statusData?.key ||
+      statusData?.pdfUrl ||
+      statusData?.presignedUrl ||
+      statusData?.presigned_url ||
+      statusData?.url
+  );
+}
+
+function buildPdfMissingMessage(reportId, s3Key) {
+  const keyText = s3Key ? ` Expected key: ${s3Key}.` : "";
+  const idText = reportId ? ` Report ID: ${reportId}.` : "";
+  return `The job was marked completed, but the PDF could not be confirmed in S3.${idText}${keyText} Please check the renderer Lambda/debug folder; JSON generation succeeded but PDF render/upload did not finish.`;
+}
+
+
 function formatReportTimestamp(date = new Date()) {
   try {
     return date.toLocaleString("en-IN", {
@@ -341,12 +362,15 @@ function templatePreviewWireframe(template) {
 
 function buildDefaultPrebookTemplate({ questions, brief }) {
   const now = nowIso();
+  const cleanQuestions = (questions || []).filter((q) => String(q || "").trim());
+
   return {
     id: "default_prebook_template",
     name: "Standard Default",
     targetAudience: brief?.audience || "",
-    description: "Fallback default template derived from the current built-in pre-book report structure.",
-    version: 1,
+    description:
+      "Default pre-book template with early table/chart guidance and no visible special-instruction sections.",
+    version: 2,
     createdAt: now,
     updatedAt: now,
     layout: [
@@ -377,34 +401,219 @@ function buildDefaultPrebookTemplate({ questions, brief }) {
         sections: [
           {
             heading: "Research Questions",
-            subsections: (questions || [])
-              .filter((q) => q.trim())
-              .map((q, i) => ({
+            subsections: cleanQuestions.map((q, i) => {
+              const isFirstQuestion = i === 0;
+              const isFourthQuestion = i === 3;
+              return {
                 title: `Question ${i + 1}`,
-                chart: { type: "none", notes: "" },
-                table: { columns: [], rowLimit: 12 },
+                // IMPORTANT: keep at least one requested chart in the first few pages.
+                // The previous default sent chartType/type as "none" everywhere, which allowed
+                // the model to return chart: null for the entire report.
+                chart: isFirstQuestion
+                  ? {
+                      type: "bar",
+                      notes:
+                        "Create a simple comparison chart with 4-6 numeric data points relevant to this question.",
+                    }
+                  : { type: "none", notes: "" },
+                // IMPORTANT: request early tables too, so the renderer has useful structured data.
+                table: isFirstQuestion
+                  ? {
+                      columns: ["Company / Party", "Role", "Estimated Relevance", "Business Note"],
+                      rowLimit: 8,
+                    }
+                  : isFourthQuestion
+                  ? {
+                      columns: ["SKU / HS Code", "Description", "Demand Note"],
+                      rowLimit: 8,
+                    }
+                  : { columns: [], rowLimit: 12 },
                 bodyNotes: q,
-              })),
+              };
+            }),
           },
         ],
       },
       {
-        pageTitle: "Special Instructions",
+        pageTitle: "Segmentation Analysis",
         sections: [
           {
-            heading: "Special Instructions",
+            heading: "Segmentation Analysis",
             subsections: [
               {
-                title: "Must Include",
-                chart: { type: "none", notes: "" },
-                table: { columns: [], rowLimit: 12 },
-                bodyNotes: brief?.mustInclude || "No must-include instructions provided.",
+                title: "Key Segments",
+                chart: {
+                  type: "bar",
+                  notes: "Show estimated segment share with chart-friendly numeric values.",
+                },
+                table: {
+                  columns: ["Segment", "Estimate / Share", "Business Note"],
+                  rowLimit: 6,
+                },
+                bodyNotes:
+                  "Break the market into major segments or sub-segments and explain their role.",
               },
               {
-                title: "Avoid / Special Notes",
+                title: "Demand Distribution",
                 chart: { type: "none", notes: "" },
                 table: { columns: [], rowLimit: 12 },
-                bodyNotes: brief?.avoidNotes || "No avoid notes provided.",
+                bodyNotes:
+                  "Explain how demand is distributed across segments, use-cases, buyer groups, or geography.",
+              },
+            ],
+          },
+        ],
+      },
+      {
+        pageTitle: "Demand and Customer Analysis",
+        sections: [
+          {
+            heading: "Demand and Customer Analysis",
+            subsections: [
+              {
+                title: "Demand Drivers",
+                chart: { type: "none", notes: "" },
+                table: { columns: [], rowLimit: 12 },
+                bodyNotes: "Explain what is driving customer or buyer demand.",
+              },
+              {
+                title: "Buyer Behavior",
+                chart: { type: "none", notes: "" },
+                table: { columns: [], rowLimit: 12 },
+                bodyNotes: "Describe commercial behavior, purchase logic, and adoption triggers.",
+              },
+            ],
+          },
+        ],
+      },
+      {
+        pageTitle: "Growth Drivers",
+        sections: [
+          {
+            heading: "Growth Drivers",
+            subsections: [
+              {
+                title: "Growth Catalysts",
+                chart: { type: "none", notes: "" },
+                table: { columns: [], rowLimit: 12 },
+                bodyNotes: "Explain structural and near-term growth drivers.",
+              },
+              {
+                title: "Enablers",
+                chart: { type: "none", notes: "" },
+                table: { columns: [], rowLimit: 12 },
+                bodyNotes:
+                  "Describe enabling factors such as regulation, technology, channels, or ecosystem shifts.",
+              },
+            ],
+          },
+        ],
+      },
+      {
+        pageTitle: "Risks and Constraints",
+        sections: [
+          {
+            heading: "Risks and Constraints",
+            subsections: [
+              {
+                title: "Constraints",
+                chart: { type: "none", notes: "" },
+                table: { columns: [], rowLimit: 12 },
+                bodyNotes: "Explain market constraints, barriers, and operational bottlenecks.",
+              },
+              {
+                title: "Risks and Challenges",
+                chart: { type: "none", notes: "" },
+                table: { columns: [], rowLimit: 12 },
+                bodyNotes: "Explain strategic, commercial, and execution risks.",
+              },
+            ],
+          },
+        ],
+      },
+      {
+        pageTitle: "Competitive Landscape",
+        sections: [
+          {
+            heading: "Competitive Landscape",
+            subsections: [
+              {
+                title: "Key Players",
+                chart: { type: "none", notes: "" },
+                table: {
+                  columns: ["Player / Group", "Positioning", "Business Note"],
+                  rowLimit: 10,
+                },
+                bodyNotes: "Identify major player groups and their relative positioning.",
+              },
+              {
+                title: "Competition Dynamics",
+                chart: { type: "none", notes: "" },
+                table: { columns: [], rowLimit: 12 },
+                bodyNotes: "Explain how firms compete, differentiate, and defend market position.",
+              },
+            ],
+          },
+        ],
+      },
+      {
+        pageTitle: "Outlook",
+        sections: [
+          {
+            heading: "Outlook",
+            subsections: [
+              {
+                title: "3-5 Year Outlook",
+                chart: { type: "line", notes: "Show base-case directional trend over 3-5 years." },
+                table: { columns: [], rowLimit: 12 },
+                bodyNotes: "Provide a realistic medium-term outlook with directional confidence.",
+              },
+              {
+                title: "Scenario View",
+                chart: { type: "none", notes: "" },
+                table: {
+                  columns: ["Scenario", "Likely Outcome", "Business Implication"],
+                  rowLimit: 3,
+                },
+                bodyNotes: "Describe base, optimistic, and conservative business scenarios.",
+              },
+            ],
+          },
+        ],
+      },
+      {
+        pageTitle: "Recommendations",
+        sections: [
+          {
+            heading: "Recommendations",
+            subsections: [
+              {
+                title: "Strategic Recommendations",
+                chart: { type: "none", notes: "" },
+                table: { columns: [], rowLimit: 12 },
+                bodyNotes: "Provide specific practical recommendations for a business audience.",
+              },
+              {
+                title: "Assumptions and Data Gaps",
+                chart: { type: "none", notes: "" },
+                table: { columns: [], rowLimit: 12 },
+                bodyNotes: "State assumptions, evidence limits, and unresolved data gaps clearly.",
+              },
+            ],
+          },
+        ],
+      },
+      {
+        pageTitle: "Appendix",
+        sections: [
+          {
+            heading: "Appendix",
+            subsections: [
+              {
+                title: "Supporting Notes",
+                chart: { type: "none", notes: "" },
+                table: { columns: [], rowLimit: 12 },
+                bodyNotes: "Add concise supporting observations only if useful; do not add filler.",
               },
             ],
           },
@@ -1078,12 +1287,13 @@ export default function App() {
       typeof itemOrId === "string"
         ? prebookHistory.find((x) => x.id === itemOrId) || null
         : itemOrId || null;
-  
+
     if (!item) return null;
     if (!item.reportId) return item;
-  
+
     const statusData = await fetchPrebookStatus(item.reportId);
-  
+    const resolvedKey = resolvePrebookPdfKey(item, statusData);
+
     const nextItem = {
       ...item,
       reportId: statusData.reportId || item.reportId,
@@ -1091,30 +1301,44 @@ export default function App() {
       title: statusData.reportName || item.title || item.reportName,
       topic: statusData.topic || item.topic,
       status: statusData.status || item.status || "unknown",
-      s3Key: resolvePrebookPdfKey(item, statusData),
-      pdfKey: resolvePrebookPdfKey(item, statusData),
+      s3Key: resolvedKey,
+      pdfKey: resolvedKey,
       pdfUrl: statusData.pdfUrl || item.pdfUrl || "",
       raw: statusData,
     };
-  
-    // IMPORTANT: always persist the latest status first
+
+    // Always persist latest worker/status payload first.
     upsertPrebookItem(item.id, nextItem);
-  
+
     if (["completed", "done"].includes(prettyStatus(nextItem.status))) {
-      const refreshed = await ensurePrebookPdfUrl(nextItem);
-  
-      const finalItem = {
-        ...nextItem,
-        pdfUrl: refreshed?.pdfUrl || nextItem.pdfUrl || "",
-        s3Key: refreshed?.s3Key || refreshed?.pdfKey || nextItem.s3Key || nextItem.pdfKey || "",
-        pdfKey: refreshed?.pdfKey || refreshed?.s3Key || nextItem.pdfKey || nextItem.s3Key || "",
-      };
-  
-      // IMPORTANT: persist again after presign refresh
-      upsertPrebookItem(item.id, finalItem);
-      return finalItem;
+      try {
+        const refreshed = await ensurePrebookPdfUrl(nextItem);
+
+        const finalItem = {
+          ...nextItem,
+          pdfUrl: refreshed?.pdfUrl || nextItem.pdfUrl || "",
+          s3Key: refreshed?.s3Key || refreshed?.pdfKey || nextItem.s3Key || nextItem.pdfKey || "",
+          pdfKey: refreshed?.pdfKey || refreshed?.s3Key || nextItem.pdfKey || nextItem.s3Key || "",
+        };
+
+        upsertPrebookItem(item.id, finalItem);
+        return finalItem;
+      } catch (e) {
+        const msg = e?.message || buildPdfMissingMessage(nextItem.reportId, resolvedKey);
+        const failedItem = {
+          ...nextItem,
+          status: "pdf_missing",
+          pdfUrl: "",
+          raw: {
+            ...(statusData || {}),
+            pdfCheckError: msg,
+          },
+        };
+        upsertPrebookItem(item.id, failedItem);
+        throw new Error(msg);
+      }
     }
-  
+
     return nextItem;
   }
 
@@ -1193,34 +1417,33 @@ export default function App() {
   async function pollPrebookStatusUntilDone({ reportId, historyId }) {
     const startedAt = Date.now();
     pollAbortRef.current.aborted = false;
-  
+
     setModalOpen(true);
     setModalTitle("Generating pre-book report…");
     setModalSub("Queued • waiting for worker");
     setProgressPct(8);
-  
+
     const timer = setInterval(() => {
       if (!mountedRef.current) return;
       setProgressPct((p) => (p >= 92 ? p : Math.min(92, p + 1)));
     }, 900);
-  
+
     try {
       while (Date.now() - startedAt < MAX_WAIT_MS) {
         if (!mountedRef.current) throw new Error("Page closed");
         if (pollAbortRef.current.aborted) throw new Error("Polling aborted");
-  
+
         let data = null;
         let pollError = null;
-  
+
         try {
           data = await fetchPrebookStatus(reportId);
         } catch (e) {
           pollError = e;
         }
-  
+
         if (!mountedRef.current) throw new Error("Page closed");
-  
-        // IMPORTANT:
+
         // During the first ~20 seconds, a 404 / not-found can simply mean
         // the worker has not yet written the DynamoDB item.
         if (pollError) {
@@ -1229,41 +1452,86 @@ export default function App() {
             msg.includes("404") ||
             msg.includes("not found") ||
             msg.includes("report job not found");
-  
+
           if (isNotReadyYet && Date.now() - startedAt < 20000) {
             setModalSub("Queued • waiting for worker");
             await new Promise((r) => setTimeout(r, POLL_EVERY_MS));
             continue;
           }
-  
+
           throw pollError;
         }
-  
+
         setLastApiResponse(data);
-  
+
         const status = prettyStatus(data?.status);
         const errMsg = data?.errorMessage || data?.error || data?.details || "";
-  
+        const resolvedKey = resolvePrebookPdfKey(
+          { id: historyId, reportId, createdAt: nowIso() },
+          data || {}
+        );
+
         upsertPrebookItem(historyId, {
           reportId: data?.reportId || reportId,
           reportName: data?.reportName || undefined,
           title: data?.reportName || undefined,
           status: data?.status || "unknown",
-            s3Key: resolvePrebookPdfKey({ id: historyId, reportId, createdAt: nowIso() }, data || {}),
-          pdfKey: resolvePrebookPdfKey({ id: historyId, reportId, createdAt: nowIso() }, data || {}),
+          s3Key: resolvedKey,
+          pdfKey: resolvedKey,
           raw: data,
         });
-  
+
         if (["completed", "done"].includes(status)) {
-          setModalSub("Ready");
+          setModalSub("Worker says completed • confirming PDF in S3");
           setProgressPct(95);
-          return data;
+
+          // Critical guard: do not let the UI treat the report as complete unless
+          // a presigned PDF URL can actually be created. This catches the exact
+          // case where only JSON was saved and PDF rendering/upload failed.
+          try {
+            const refreshed = await ensurePrebookPdfUrl({
+              id: historyId,
+              reportId: data?.reportId || reportId,
+              status: data?.status || "completed",
+              s3Key: resolvedKey,
+              pdfKey: resolvedKey,
+              raw: data,
+            });
+
+            upsertPrebookItem(historyId, {
+              status: data?.status || "completed",
+              s3Key: refreshed?.s3Key || resolvedKey,
+              pdfKey: refreshed?.pdfKey || resolvedKey,
+              pdfUrl: refreshed?.pdfUrl || "",
+              raw: data,
+            });
+
+            return {
+              ...(data || {}),
+              s3Key: refreshed?.s3Key || resolvedKey,
+              pdfKey: refreshed?.pdfKey || resolvedKey,
+              pdfUrl: refreshed?.pdfUrl || "",
+            };
+          } catch (e) {
+            const msg = e?.message || buildPdfMissingMessage(data?.reportId || reportId, resolvedKey);
+            upsertPrebookItem(historyId, {
+              status: "pdf_missing",
+              s3Key: resolvedKey,
+              pdfKey: resolvedKey,
+              pdfUrl: "",
+              raw: {
+                ...(data || {}),
+                pdfCheckError: msg,
+              },
+            });
+            throw new Error(msg);
+          }
         }
-  
-        if (status === "failed") {
+
+        if (status === "failed" || status === "pdf_missing") {
           throw new Error(errMsg || "Pre-book report failed");
         }
-  
+
         setModalSub(
           status === "rendering_pdf"
             ? "Rendering PDF • almost done"
@@ -1273,10 +1541,10 @@ export default function App() {
             ? "Generating content • researching + drafting"
             : "Queued • waiting for worker"
         );
-  
+
         await new Promise((r) => setTimeout(r, POLL_EVERY_MS));
       }
-  
+
       throw new Error(
         `Pre-book report is still running after ${Math.round(MAX_WAIT_MS / 1000)}s. Please check again shortly.`
       );
@@ -1284,7 +1552,7 @@ export default function App() {
       clearInterval(timer);
     }
   }
-  
+
   async function getPresignedUrl({ userPhone, instantId, s3Key, api }) {
     const endpoint = api || PRESIGN_API;
     const url = new URL(endpoint);
@@ -1313,14 +1581,14 @@ export default function App() {
     if (!PREBOOK_PRESIGN_API) {
       throw new Error("Missing env var: VITE_PREBOOK_PRESIGN_API");
     }
-    
+
     const status = prettyStatus(item.status);
     if (!["completed", "done"].includes(status)) {
       throw new Error(`This pre-book report is still ${status}.`);
     }
 
     const resolvedPdfKey = resolvePrebookPdfKey(item, item.raw || {});
-    
+
     if (!resolvedPdfKey && !item.reportId) {
       throw new Error("No s3Key/reportId available for this pre-book report.");
     }
@@ -1336,14 +1604,20 @@ export default function App() {
     });
 
     if (!res.ok || data?.ok === false) {
-      throw new Error(buildErrorMessage(res, data, "Pre-book presign failed"));
+      throw new Error(
+        buildErrorMessage(
+          res,
+          data,
+          buildPdfMissingMessage(item.reportId, resolvedPdfKey)
+        )
+      );
     }
 
     const presignedUrl =
       data?.presignedUrl || data?.presigned_url || data?.url || data?.presignedURL || "";
 
     if (!presignedUrl) {
-      throw new Error("Pre-book presign API returned no URL");
+      throw new Error(buildPdfMissingMessage(item.reportId, resolvedPdfKey));
     }
 
     const freshUrl = withFragmentBuster(presignedUrl);
@@ -1487,7 +1761,15 @@ export default function App() {
         topic: t,
         reportName: reportDisplayName,
         questions: qs,
-        brief: deepClone(prebookBrief),
+        brief: {
+          ...deepClone(prebookBrief),
+          hiddenInstructions: {
+            mustInclude: prebookBrief.mustInclude || "",
+            avoidNotes: prebookBrief.avoidNotes || "",
+            rendererGuardrails:
+              "Do not create visible sections named Special Instructions, Must Include, Avoid / Special Notes, or References inside report.sections. Put references only in report.references.",
+          },
+        },
         template: templateToSend,
         templateMeta: {
           templateId: templateToSend?.id || "default_prebook_template",
@@ -1527,23 +1809,6 @@ export default function App() {
                   charts: [],
                   tables: [],
                 })),
-            },
-            {
-              heading: "Special Instructions",
-              subheadings: [
-                {
-                  title: "Must Include",
-                  content: prebookBrief.mustInclude || "No must-include instructions provided.",
-                  charts: [],
-                  tables: [],
-                },
-                {
-                  title: "Avoid / Special Notes",
-                  content: prebookBrief.avoidNotes || "No avoid notes provided.",
-                  charts: [],
-                  tables: [],
-                },
-              ],
             },
           ],
         },
@@ -1609,34 +1874,11 @@ export default function App() {
       const statusData = await pollPrebookStatusUntilDone({ reportId, historyId });
       if (!statusData || !mountedRef.current) return;
       
-      const resolvedStatusPdfKey = resolvePrebookPdfKey(
-        { id: historyId, reportId, createdAt: nowIso() },
-        statusData || {}
-      );
+      const resolvedStatusPdfKey =
+        statusData?.s3Key ||
+        statusData?.pdfKey ||
+        resolvePrebookPdfKey({ id: historyId, reportId, createdAt: nowIso() }, statusData || {});
 
-      const finalItem = {
-        id: historyId,
-        reportId: statusData.reportId || reportId,
-        status: statusData.status || "completed",
-        s3Key: resolvedStatusPdfKey,
-        pdfKey: resolvedStatusPdfKey,
-      };
-      
-      let freshPdfUrl = "";
-      if (
-        prettyStatus(statusData.status) === "completed" ||
-        prettyStatus(statusData.status) === "done"
-      ) {
-        const refreshed = await ensurePrebookPdfUrl({
-          ...finalItem,
-          reportId: statusData.reportId || reportId,
-          status: statusData.status || "completed",
-          s3Key: resolvedStatusPdfKey || finalItem.s3Key || finalItem.pdfKey || "",
-          pdfKey: resolvedStatusPdfKey || finalItem.pdfKey || finalItem.s3Key || "",
-        });
-        freshPdfUrl = refreshed?.pdfUrl || "";
-      }
-      
       upsertPrebookItem(historyId, {
         reportName: statusData.reportName || reportDisplayName,
         title: statusData.reportName || reportDisplayName,
@@ -1644,7 +1886,7 @@ export default function App() {
         status: statusData.status || "completed",
         s3Key: resolvedStatusPdfKey,
         pdfKey: resolvedStatusPdfKey,
-        pdfUrl: freshPdfUrl || "",
+        pdfUrl: statusData.pdfUrl || "",
         raw: statusData,
       });
       
