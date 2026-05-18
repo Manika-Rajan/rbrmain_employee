@@ -380,7 +380,7 @@ function buildDefaultPrebookTemplate({ questions, brief }) {
             subsections: (questions || [])
               .filter((q) => q.trim())
               .map((q, i) => ({
-                title: `Question ${i + 1}`,
+                title: `Segment ${i + 1}`,
                 chart: { type: "none", notes: "" },
                 table: { columns: [], rowLimit: 12 },
                 bodyNotes: q,
@@ -1522,7 +1522,7 @@ export default function App() {
               subheadings: prebookQuestions
                 .filter((q) => q.trim())
                 .map((q, i) => ({
-                  title: `Question ${i + 1}`,
+                  title: `Segment ${i + 1}`,
                   content: q,
                   charts: [],
                   tables: [],
