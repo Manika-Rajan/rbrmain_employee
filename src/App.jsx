@@ -1435,10 +1435,17 @@ export default function App() {
 
       const returnedKey = statusData?.s3Key || statusData?.s3_key || "";
 
-      const finalS3Key =
-        returnedKey && returnedKey.startsWith("instant/")
-          ? returnedKey
-          : `instant/${userPhone}/${instantId}.pdf`;
+      const finalS3Key = statusData?.s3Key || statusData?.s3_key || "";
+
+      if (!finalS3Key) {
+        throw new Error("Status API did not return s3Key. Please check instant worker output path.");
+      }
+      
+      const presignedUrl = await getPresignedUrl({
+        userPhone,
+        instantId,
+        s3Key: finalS3Key,
+      });
       
       const presignedUrl = await getPresignedUrl({
         userPhone,
