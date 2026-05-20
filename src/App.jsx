@@ -163,6 +163,27 @@ function getDateFolderFromIso(value) {
   return `${y}-${m}-${day}`;
 }
 
+function resolveInstantPdfKey(data = {}) {
+  const key =
+    data.s3Key ||
+    data.s3_key ||
+    data.pdfKey ||
+    data.pdf_key ||
+    data.fileKey ||
+    data.file_key ||
+    data.key ||
+    "";
+
+  if (!key) return "";
+
+  // Employee instant reports are stored in:
+  // instant_reports/EMP10000001/RBR_Instant_<topic>_<date>.pdf
+  // Do not force the old customer-flow prefix: instant/
+  if (key.startsWith("instant_reports/")) return key;
+
+  return key;
+}
+
 function resolvePrebookPdfKey(item = {}, statusData = {}) {
   const reportId =
     statusData.reportId ||
@@ -1157,13 +1178,12 @@ export default function App() {
         const status = prettyStatus(data.status);
         const errMsg = data.error || data.details || "";
 
+        const instantPdfKey = resolveInstantPdfKey(data);
+
         upsertHistoryItem(historyId, {
           status: data.status || "unknown",
           statusResponse: data,
-          s3Key:
-            (data.s3Key || data.s3_key || "").startsWith("instant/")
-              ? data.s3Key || data.s3_key
-              : "",
+          s3Key: instantPdfKey,
           title: data.title || undefined,
           subtitle: data.subtitle || undefined,
         });
@@ -1433,20 +1453,26 @@ export default function App() {
       const statusData = await pollStatusUntilDone({ userPhone, instantId, historyId });
       if (!statusData || !mountedRef.current) return;
 
-      const returnedKey = statusData?.s3Key || statusData?.s3_key || "";
-
-      const finalS3Key = statusData?.s3Key || statusData?.s3_key || "";
+      const finalS3Key = resolveInstantPdfKey(statusData);
 
       if (!finalS3Key) {
-        throw new Error("Status API did not return s3Key. Please check instant worker output path.");
+        throw new Error(
+          "Status API did not return the instant report S3 key. Please check the instant worker/status Lambda response."
+        );
       }
-      
+
+      if (!finalS3Key.startsWith("instant_reports/")) {
+        throw new Error(
+          `Instant report S3 key must start with instant_reports/. Received: ${finalS3Key}`
+        );
+      }
+
       const presignedUrl = await getPresignedUrl({
         userPhone,
         instantId,
         s3Key: finalS3Key,
       });
-      
+
       const finalUrl = withFragmentBuster(presignedUrl);
 
       upsertHistoryItem(historyId, {
