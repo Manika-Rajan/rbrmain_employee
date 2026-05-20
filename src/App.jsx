@@ -1160,7 +1160,10 @@ export default function App() {
         upsertHistoryItem(historyId, {
           status: data.status || "unknown",
           statusResponse: data,
-          s3Key: data.s3Key || data.s3_key || "",
+          s3Key:
+            (data.s3Key || data.s3_key || "").startsWith("instant/")
+              ? data.s3Key || data.s3_key
+              : "",
           title: data.title || undefined,
           subtitle: data.subtitle || undefined,
         });
@@ -1430,10 +1433,18 @@ export default function App() {
       const statusData = await pollStatusUntilDone({ userPhone, instantId, historyId });
       if (!statusData || !mountedRef.current) return;
 
-      const finalS3Key =
-        statusData?.s3Key || statusData?.s3_key || `instant/${userPhone}/${instantId}.pdf`;
+      const returnedKey = statusData?.s3Key || statusData?.s3_key || "";
 
-      const presignedUrl = await getPresignedUrl({ userPhone, instantId, s3Key: finalS3Key });
+      const finalS3Key =
+        returnedKey && returnedKey.startsWith("instant/")
+          ? returnedKey
+          : `instant/${userPhone}/${instantId}.pdf`;
+      
+      const presignedUrl = await getPresignedUrl({
+        userPhone,
+        instantId,
+        s3Key: finalS3Key,
+      });
       const finalUrl = withFragmentBuster(presignedUrl);
 
       upsertHistoryItem(historyId, {
