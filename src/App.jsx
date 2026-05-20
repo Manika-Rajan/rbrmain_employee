@@ -1447,11 +1447,6 @@ export default function App() {
         s3Key: finalS3Key,
       });
       
-      const presignedUrl = await getPresignedUrl({
-        userPhone,
-        instantId,
-        s3Key: finalS3Key,
-      });
       const finalUrl = withFragmentBuster(presignedUrl);
 
       upsertHistoryItem(historyId, {
