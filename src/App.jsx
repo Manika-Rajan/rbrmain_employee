@@ -279,6 +279,15 @@ function normalize(s) {
   return String(s || "").trim().toLowerCase();
 }
 
+function normalizeSlug(value = "") {
+  return String(value || "")
+    .toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/_+/g, "_")
+    .replace(/^_+|_+$/g, "");
+}
+
 function prettyStatus(s) {
   const x = normalize(s);
   return x || "unknown";
@@ -501,12 +510,20 @@ export default function App() {
   const SUGGEST_API = "https://vtwyu7hv50.execute-api.ap-south-1.amazonaws.com/default/suggest";
   const SUGGEST_PREVIEW_API = "https://vtwyu7hv50.execute-api.ap-south-1.amazonaws.com/default/RBR_report_pre-signed_URL";
 
+  // Import/Export admin APIs. Add these in Amplify env vars after creating the save/list Lambdas.
+  const IMPORT_SEARCH_MAP_SAVE_API = import.meta.env.VITE_IMPORT_SEARCH_MAP_SAVE_API || "";
+  const IMPORT_COMPANY_SAVE_API = import.meta.env.VITE_IMPORT_COMPANY_SAVE_API || "";
+  const IMPORT_SEARCH_ANALYTICS_API = import.meta.env.VITE_IMPORT_SEARCH_ANALYTICS_API || "";
+
   const [publishingIds, setPublishingIds] = useState({});
   const [topic, setTopic] = useState("FMCG market report India");
   const [questions, setQuestions] = useState(DEFAULT_QUESTIONS);
   const [activeTab, setActiveTab] = useState("instant");
+  const [instantAdminTab, setInstantAdminTab] = useState("generate");
+  const [mappingSeed, setMappingSeed] = useState(null);
   const isPrebook = activeTab === "prebook";
   const isCatalog = activeTab === "catalog";
+  const isInstantAdmin = activeTab === "instant" && instantAdminTab !== "generate";
 
   const theme = useMemo(() => {
     return isPrebook
@@ -2795,19 +2812,55 @@ export default function App() {
             </div>
 
             {activeTab === "instant" ? (
-              <div className="quickChips">
-                {QUICK_TOPICS.map((t) => (
-                  <button
-                    key={t}
-                    className="chipPill"
-                    onClick={() => setTopic(t)}
-                    type="button"
-                    title="Use this topic"
-                  >
-                    {t}
-                  </button>
-                ))}
-              </div>
+              <>
+                <div className="quickChips">
+                  {[
+                    ["generate", "Generate Report"],
+                    ["mapping", "Search Term Mapping"],
+                    ["companies", "Importer Database"],
+                    ["analytics", "Search Analytics"],
+                  ].map(([key, label]) => (
+                    <button
+                      key={key}
+                      className="chipPill"
+                      onClick={() => setInstantAdminTab(key)}
+                      type="button"
+                      style={{
+                        border:
+                          instantAdminTab === key
+                            ? "1px solid rgba(37,99,235,0.62)"
+                            : "1px solid rgba(255,255,255,0.14)",
+                        background:
+                          instantAdminTab === key
+                            ? "rgba(37,99,235,0.22)"
+                            : "rgba(255,255,255,0.08)",
+                        color:
+                          instantAdminTab === key
+                            ? "rgba(219,234,254,0.98)"
+                            : "rgba(255,255,255,0.88)",
+                      }}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+
+                {QUICK_TOPICS.length ? (
+                  <div className="quickChips">
+                    {QUICK_TOPICS.map((t) => (
+                      <button
+                        key={t}
+                        className="chipPill"
+                        onClick={() => setTopic(t)}
+                        type="button"
+                        title="Use this topic"
+                      >
+                        {t}
+                      </button>
+                    ))}
+                  </div>
+                ) : null}
+              </>
             ) : null}
           </div>
 
@@ -3350,8 +3403,8 @@ export default function App() {
           </>
         ) : null}
 
-        <div className={clsx("body", (leftHidden || isPrebook || isCatalog) && "bodyFull")}>
-          {!leftHidden && !isPrebook && !isCatalog ? (
+        <div className={clsx("body", (leftHidden || isPrebook || isCatalog || isInstantAdmin) && "bodyFull")}>
+          {!leftHidden && !isPrebook && !isCatalog && !isInstantAdmin ? (
             <aside className="left">
               <div className="panelScroll">
                 <div className="card glass">
@@ -3472,6 +3525,21 @@ export default function App() {
                 openCatalogPreview={openCatalogPreview}
                 copyToClipboard={copyToClipboard}
               />
+            ) : isInstantAdmin ? (
+              <InstantImportExportAdminPanel
+                mode={instantAdminTab}
+                searchMapSaveApi={IMPORT_SEARCH_MAP_SAVE_API}
+                companySaveApi={IMPORT_COMPANY_SAVE_API}
+                analyticsApi={IMPORT_SEARCH_ANALYTICS_API}
+                mappingSeed={mappingSeed}
+                clearMappingSeed={() => setMappingSeed(null)}
+                openMappingWithSeed={(seed) => {
+                  setMappingSeed(seed);
+                  setInstantAdminTab("mapping");
+                }}
+                setToast={setToast}
+                copyToClipboard={copyToClipboard}
+              />
             ) : isPrebook ? (
               <div className="card glass" style={{ border: `1px solid ${theme.accentBorder}`, background: theme.panelBg }}>
                 <div className="cardTitleRow">
@@ -3545,7 +3613,7 @@ export default function App() {
               </div>
             ) : null}
 
-            {!isCatalog ? (
+            {!isCatalog && !isInstantAdmin ? (
               <>
                 <div className="compareHeader">
                   <div className="compareTitleRow">
@@ -3571,8 +3639,416 @@ export default function App() {
 
         <footer className="footer">
           {isCatalog
-            ? "Tip: Use this tab to compare catalog records against live /suggest output and improve relevance."            : "Tip: Generate 2–3 reports with small prompt changes and compare output quality."}
+            ? "Tip: Use this tab to compare catalog records against live /suggest output and improve relevance."
+            : isInstantAdmin
+            ? "Tip: Keep search mappings curated. They control which importer categories appear in instant reports."
+            : "Tip: Generate 2–3 reports with small prompt changes and compare output quality."}
         </footer>
+      </div>
+    </div>
+  );
+}
+
+
+function InstantImportExportAdminPanel({
+  mode,
+  searchMapSaveApi,
+  companySaveApi,
+  analyticsApi,
+  mappingSeed,
+  clearMappingSeed,
+  openMappingWithSeed,
+  setToast,
+  copyToClipboard,
+}) {
+  const [mapping, setMapping] = useState({
+    searchTerm: "",
+    mappedTerm: "",
+    confidence: 100,
+    priority: 1,
+    active: true,
+    addedBy: "rajan",
+    remarks: "",
+  });
+
+  const [company, setCompany] = useState({
+    country: "",
+    productCategory: "",
+    companyId: "",
+    companyName: "",
+    companyBriefing: "",
+    brands: "",
+    supplyRequested: "",
+    searchTerms: "",
+    phone: "",
+    email: "",
+    type: "",
+  });
+
+  const [analyticsRows, setAnalyticsRows] = useState(() => {
+    try {
+      const raw = localStorage.getItem("rbr_import_search_analytics_samples_v1");
+      if (raw) return JSON.parse(raw);
+    } catch {}
+    return [
+      { query: "rubber clothes", count: 7, country: "Malaysia", mappingExists: false, lastSeen: nowIso() },
+      { query: "clothes", count: 18, country: "Malaysia", mappingExists: true, lastSeen: nowIso() },
+      { query: "bamboo garments", count: 3, country: "UAE", mappingExists: false, lastSeen: nowIso() },
+    ];
+  });
+  const [analyticsQuery, setAnalyticsQuery] = useState("");
+  const [analyticsCountry, setAnalyticsCountry] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [panelMsg, setPanelMsg] = useState("");
+
+  useEffect(() => {
+    try {
+      localStorage.setItem("rbr_import_search_analytics_samples_v1", JSON.stringify(analyticsRows));
+    } catch {}
+  }, [analyticsRows]);
+
+  useEffect(() => {
+    if (!mappingSeed) return;
+    setMapping((prev) => ({
+      ...prev,
+      searchTerm: mappingSeed.searchTerm || mappingSeed.search_key || prev.searchTerm,
+      mappedTerm: mappingSeed.mappedTerm || mappingSeed.mapped_term || prev.mappedTerm,
+      remarks: mappingSeed.remarks || prev.remarks,
+    }));
+    clearMappingSeed?.();
+  }, [mappingSeed, clearMappingSeed]);
+
+  async function postJsonOrCopy(apiUrl, payload, successText) {
+    if (!apiUrl) {
+      await copyToClipboard?.(JSON.stringify(payload, null, 2));
+      setPanelMsg("API URL is not configured yet. Payload copied to clipboard so you can test it in Lambda/API Gateway.");
+      setToast?.("Payload copied ✅");
+      return;
+    }
+
+    const { res, data } = await fetchJson(apiUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+
+    if (!res.ok || data?.ok === false) {
+      throw new Error(buildErrorMessage(res, data, "Save failed"));
+    }
+
+    setPanelMsg(successText);
+    setToast?.("Saved ✅");
+  }
+
+  async function saveMapping(e) {
+    e.preventDefault();
+    setPanelMsg("");
+
+    const payload = {
+      search_key: normalizeSlug(mapping.searchTerm),
+      mapped_term: normalizeSlug(mapping.mappedTerm),
+      confidence: Number(mapping.confidence || 0),
+      priority: Number(mapping.priority || 1),
+      active: Boolean(mapping.active),
+      added_by: mapping.addedBy || "rajan",
+      remarks: mapping.remarks || "",
+      created_on: new Date().toISOString().slice(0, 10),
+      last_updated: new Date().toISOString().slice(0, 10),
+    };
+
+    if (!payload.search_key || !payload.mapped_term) {
+      setPanelMsg("Search term and mapped product term are required.");
+      return;
+    }
+
+    setSaving(true);
+    try {
+      await postJsonOrCopy(searchMapSaveApi, payload, "Search mapping saved successfully.");
+      setMapping({ searchTerm: "", mappedTerm: "", confidence: 100, priority: 1, active: true, addedBy: "rajan", remarks: "" });
+    } catch (e2) {
+      setPanelMsg(e2?.message || "Mapping save failed");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function saveCompany(e) {
+    e.preventDefault();
+    setPanelMsg("");
+
+    const countrySlug = normalizeSlug(company.country);
+    const categorySlug = normalizeSlug(company.productCategory);
+    const idSlug = normalizeSlug(company.companyId || `auto_${Date.now()}`);
+
+    const payload = {
+      product_country_key: countrySlug,
+      company_id: `${categorySlug}#${idSlug}`,
+      product_category: categorySlug,
+      company_name: company.companyName,
+      company_briefing: company.companyBriefing,
+      brands: company.brands,
+      supply_requested: company.supplyRequested,
+      search_terms: company.searchTerms,
+      phone: company.phone,
+      email: company.email,
+      type: company.type,
+      country: company.country,
+      created_on: new Date().toISOString().slice(0, 10),
+      last_updated: new Date().toISOString().slice(0, 10),
+    };
+
+    if (!payload.product_country_key || !categorySlug || !payload.company_name) {
+      setPanelMsg("Country, product category, and company name are required.");
+      return;
+    }
+
+    setSaving(true);
+    try {
+      await postJsonOrCopy(companySaveApi, payload, "Company line item saved successfully.");
+      setCompany({ country: "", productCategory: "", companyId: "", companyName: "", companyBriefing: "", brands: "", supplyRequested: "", searchTerms: "", phone: "", email: "", type: "" });
+    } catch (e2) {
+      setPanelMsg(e2?.message || "Company save failed");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function loadAnalyticsFromApi() {
+    if (!analyticsApi) {
+      setPanelMsg("Search analytics API is not configured yet. Showing local sample rows for now.");
+      return;
+    }
+    setSaving(true);
+    setPanelMsg("");
+    try {
+      const { res, data } = await fetchJson(analyticsApi, { method: "GET" });
+      if (!res.ok || data?.ok === false) throw new Error(buildErrorMessage(res, data, "Analytics load failed"));
+      const rows = Array.isArray(data?.items) ? data.items : Array.isArray(data) ? data : [];
+      setAnalyticsRows(rows.map((r, idx) => ({
+        query: r.query || r.search_query || r.searchTerm || `query_${idx + 1}`,
+        count: Number(r.count || r.frequency || 1),
+        country: r.country || r.target_country || "",
+        mappingExists: Boolean(r.mappingExists || r.mapping_exists),
+        lastSeen: r.lastSeen || r.last_seen || r.updatedAt || nowIso(),
+      })));
+      setPanelMsg("Search analytics loaded.");
+    } catch (e2) {
+      setPanelMsg(e2?.message || "Analytics load failed");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  function addAnalyticsSample(e) {
+    e.preventDefault();
+    const q = analyticsQuery.trim();
+    if (!q) return;
+    setAnalyticsRows((prev) => [
+      { query: q, count: 1, country: analyticsCountry.trim(), mappingExists: false, lastSeen: nowIso() },
+      ...prev,
+    ]);
+    setAnalyticsQuery("");
+    setAnalyticsCountry("");
+    setPanelMsg("Search row added locally.");
+  }
+
+  const cardStyle = {
+    border: "1px solid rgba(37,99,235,0.28)",
+    background: "rgba(10,12,18,0.58)",
+  };
+
+  if (mode === "mapping") {
+    return (
+      <div className="card glass" style={cardStyle}>
+        <div className="cardTitleRow">
+          <div>
+            <div className="cardTitle">Search Term Mapping</div>
+            <div className="mutedSmall">Maps real user language to curated product categories.</div>
+          </div>
+          <div className="mutedSmall mono">rbrmain-import_export_search_terms_map</div>
+        </div>
+
+        {panelMsg ? <div className="errorBox" style={{ marginTop: 12 }}>{panelMsg}</div> : null}
+
+        <form onSubmit={saveMapping} style={{ display: "grid", gap: 12, marginTop: 16 }}>
+          <div className="historyTools">
+            <div style={{ flex: 1 }}>
+              <label className="label">User Search Term</label>
+              <input className="input" value={mapping.searchTerm} onChange={(e) => setMapping({ ...mapping, searchTerm: e.target.value })} placeholder="Rubber Clothes" />
+              <div className="mutedSmall">Saved search_key: <span className="mono">{normalizeSlug(mapping.searchTerm) || "-"}</span></div>
+            </div>
+            <div style={{ flex: 1 }}>
+              <label className="label">Mapped Product Term</label>
+              <input className="input" value={mapping.mappedTerm} onChange={(e) => setMapping({ ...mapping, mappedTerm: e.target.value })} placeholder="Rubber Gloves" />
+              <div className="mutedSmall">Saved mapped_term: <span className="mono">{normalizeSlug(mapping.mappedTerm) || "-"}</span></div>
+            </div>
+          </div>
+
+          <div className="historyTools">
+            <div style={{ width: 160 }}>
+              <label className="label">Priority</label>
+              <input className="input" type="number" min="1" value={mapping.priority} onChange={(e) => setMapping({ ...mapping, priority: e.target.value })} />
+            </div>
+            <div style={{ width: 160 }}>
+              <label className="label">Confidence</label>
+              <input className="input" type="number" min="0" max="100" value={mapping.confidence} onChange={(e) => setMapping({ ...mapping, confidence: e.target.value })} />
+            </div>
+            <div style={{ flex: 1 }}>
+              <label className="label">Added By</label>
+              <input className="input" value={mapping.addedBy} onChange={(e) => setMapping({ ...mapping, addedBy: e.target.value })} />
+            </div>
+          </div>
+
+          <label className="label">Remarks</label>
+          <textarea className="textarea" rows={3} value={mapping.remarks} onChange={(e) => setMapping({ ...mapping, remarks: e.target.value })} placeholder="Why this mapping is relevant" />
+
+          <label className="label" style={{ display: "flex", gap: 10, alignItems: "center" }}>
+            <input type="checkbox" checked={mapping.active} onChange={(e) => setMapping({ ...mapping, active: e.target.checked })} />
+            Active mapping
+          </label>
+
+          <div className="actions">
+            <button className="btn" type="submit" disabled={saving}>{saving ? "Saving..." : searchMapSaveApi ? "Save Mapping" : "Copy Payload"}</button>
+          </div>
+        </form>
+      </div>
+    );
+  }
+
+  if (mode === "companies") {
+    return (
+      <div className="card glass" style={cardStyle}>
+        <div className="cardTitleRow">
+          <div>
+            <div className="cardTitle">Importer Database Line Item</div>
+            <div className="mutedSmall">Adds verified companies used in Exports & Import Possibilities.</div>
+          </div>
+          <div className="mutedSmall mono">rbrmain-import_export_companies</div>
+        </div>
+
+        {panelMsg ? <div className="errorBox" style={{ marginTop: 12 }}>{panelMsg}</div> : null}
+
+        <form onSubmit={saveCompany} style={{ display: "grid", gap: 12, marginTop: 16 }}>
+          <div className="historyTools">
+            <div style={{ flex: 1 }}>
+              <label className="label">Country</label>
+              <input className="input" value={company.country} onChange={(e) => setCompany({ ...company, country: e.target.value })} placeholder="Malaysia" />
+              <div className="mutedSmall">PK: <span className="mono">{normalizeSlug(company.country) || "-"}</span></div>
+            </div>
+            <div style={{ flex: 1 }}>
+              <label className="label">Product Category</label>
+              <input className="input" value={company.productCategory} onChange={(e) => setCompany({ ...company, productCategory: e.target.value })} placeholder="Rubber Gloves" />
+              <div className="mutedSmall">SK prefix: <span className="mono">{normalizeSlug(company.productCategory) || "-"}#</span></div>
+            </div>
+            <div style={{ flex: 1 }}>
+              <label className="label">Company ID</label>
+              <input className="input" value={company.companyId} onChange={(e) => setCompany({ ...company, companyId: e.target.value })} placeholder="MY000001" />
+            </div>
+          </div>
+
+          <label className="label">Company Name</label>
+          <input className="input" value={company.companyName} onChange={(e) => setCompany({ ...company, companyName: e.target.value })} placeholder="Padini Holdings Berhad" />
+
+          <label className="label">Company Briefing</label>
+          <textarea className="textarea" rows={3} value={company.companyBriefing} onChange={(e) => setCompany({ ...company, companyBriefing: e.target.value })} />
+
+          <div className="historyTools">
+            <div style={{ flex: 1 }}>
+              <label className="label">Brands</label>
+              <textarea className="textarea" rows={3} value={company.brands} onChange={(e) => setCompany({ ...company, brands: e.target.value })} />
+            </div>
+            <div style={{ flex: 1 }}>
+              <label className="label">Supply Requested</label>
+              <textarea className="textarea" rows={3} value={company.supplyRequested} onChange={(e) => setCompany({ ...company, supplyRequested: e.target.value })} />
+            </div>
+          </div>
+
+          <label className="label">Search Terms</label>
+          <textarea className="textarea" rows={3} value={company.searchTerms} onChange={(e) => setCompany({ ...company, searchTerms: e.target.value })} placeholder="rubber gloves, latex gloves, industrial safety gloves" />
+
+          <div className="historyTools">
+            <div style={{ flex: 1 }}>
+              <label className="label">Phone</label>
+              <input className="input" value={company.phone} onChange={(e) => setCompany({ ...company, phone: e.target.value })} placeholder="+603..." />
+            </div>
+            <div style={{ flex: 1 }}>
+              <label className="label">Email</label>
+              <input className="input" value={company.email} onChange={(e) => setCompany({ ...company, email: e.target.value })} placeholder="purchasing@example.com" />
+            </div>
+            <div style={{ flex: 1 }}>
+              <label className="label">Type</label>
+              <input className="input" value={company.type} onChange={(e) => setCompany({ ...company, type: e.target.value })} placeholder="Importer / Retail Chain / Distributor" />
+            </div>
+          </div>
+
+          <div className="actions">
+            <button className="btn" type="submit" disabled={saving}>{saving ? "Saving..." : companySaveApi ? "Save Company" : "Copy Payload"}</button>
+          </div>
+        </form>
+      </div>
+    );
+  }
+
+  return (
+    <div className="card glass" style={cardStyle}>
+      <div className="cardTitleRow">
+        <div>
+          <div className="cardTitle">Search Analytics</div>
+          <div className="mutedSmall">Review real searches, find unmapped phrases, then create mappings.</div>
+        </div>
+        <button className="btnSecondary" type="button" onClick={loadAnalyticsFromApi} disabled={saving}>
+          {saving ? "Loading..." : "Refresh Analytics"}
+        </button>
+      </div>
+
+      {panelMsg ? <div className="errorBox" style={{ marginTop: 12 }}>{panelMsg}</div> : null}
+
+      <form className="historyTools" style={{ marginTop: 16 }} onSubmit={addAnalyticsSample}>
+        <input className="input inputSm" value={analyticsQuery} onChange={(e) => setAnalyticsQuery(e.target.value)} placeholder="Add sample user search, e.g. rubber clothes" />
+        <input className="input inputSm" value={analyticsCountry} onChange={(e) => setAnalyticsCountry(e.target.value)} placeholder="Country, e.g. Malaysia" />
+        <button className="btnSecondary" type="submit">Add Local Row</button>
+      </form>
+
+      <div className="tableWrap" style={{ marginTop: 14 }}>
+        <table className="table">
+          <thead>
+            <tr>
+              <th>User Search</th>
+              <th style={{ width: 120 }}>Normalized</th>
+              <th style={{ width: 100 }}>Count</th>
+              <th style={{ width: 130 }}>Country</th>
+              <th style={{ width: 135 }}>Mapping</th>
+              <th style={{ width: 220 }}>Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            {analyticsRows.map((row, idx) => {
+              const normalized = normalizeSlug(row.query);
+              return (
+                <tr key={`${row.query}-${idx}`} className="row">
+                  <td>
+                    <div className="titleCell">{row.query}</div>
+                    <div className="mutedSmall">Last seen: {String(row.lastSeen || "").slice(0, 10)}</div>
+                  </td>
+                  <td className="mono">{normalized}</td>
+                  <td>{row.count || 1}</td>
+                  <td>{row.country || "-"}</td>
+                  <td>{row.mappingExists ? "✅ Exists" : "⚠️ Missing"}</td>
+                  <td>
+                    <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                      <button className="btnSecondary" type="button" onClick={() => openMappingWithSeed?.({ searchTerm: row.query, remarks: `Created from Search Analytics. Country: ${row.country || "-"}` })}>
+                        Create Mapping
+                      </button>
+                      <button className="linkBtn" type="button" onClick={() => copyToClipboard?.(normalized)}>
+                        Copy key
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
       </div>
     </div>
   );
