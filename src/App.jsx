@@ -496,6 +496,168 @@ function groupHistoryByDate(items) {
   }));
 }
 
+function getSaleDateValue(item = {}) {
+  return (
+    item.saleDate ||
+    item.sale_date ||
+    item.paymentDate ||
+    item.payment_date ||
+    item.paidAt ||
+    item.paid_at ||
+    item.createdAt ||
+    item.created_at ||
+    item.updatedAt ||
+    item.updated_at ||
+    item.timestamp ||
+    item.date ||
+    ""
+  );
+}
+
+function getMonthKeyFromDateKey(dateKey) {
+  if (!dateKey || dateKey === "unknown-date") return "unknown-month";
+  return String(dateKey).slice(0, 7);
+}
+
+function formatMonthGroupLabel(monthKey) {
+  if (!monthKey || monthKey === "unknown-month") return "Unknown month";
+  const d = new Date(`${monthKey}-01T00:00:00`);
+  if (Number.isNaN(d.getTime())) return monthKey;
+  return d.toLocaleDateString(undefined, { year: "numeric", month: "long" });
+}
+
+function toAmountNumber(value) {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  const cleaned = String(value ?? "").replace(/[^0-9.-]/g, "");
+  const n = Number(cleaned);
+  return Number.isFinite(n) ? n : 0;
+}
+
+function formatInr(value) {
+  const n = toAmountNumber(value);
+  try {
+    return new Intl.NumberFormat("en-IN", {
+      style: "currency",
+      currency: "INR",
+      maximumFractionDigits: 0,
+    }).format(n);
+  } catch {
+    return `₹${n}`;
+  }
+}
+
+function normalizeSalesPayload(payload) {
+  const parsed = payload && typeof payload.body === "string" ? JSON.parse(payload.body) : payload;
+  const rawItems = Array.isArray(parsed)
+    ? parsed
+    : Array.isArray(parsed?.items)
+    ? parsed.items
+    : Array.isArray(parsed?.sales)
+    ? parsed.sales
+    : Array.isArray(parsed?.results)
+    ? parsed.results
+    : Array.isArray(parsed?.data)
+    ? parsed.data
+    : [];
+
+  return rawItems.map((item, index) => {
+    const saleDate = getSaleDateValue(item);
+    const amount = toAmountNumber(
+      item?.amount ||
+        item?.paidAmount ||
+        item?.paid_amount ||
+        item?.price ||
+        item?.total ||
+        item?.orderAmount ||
+        item?.order_amount ||
+        item?.paymentAmount ||
+        item?.payment_amount
+    );
+
+    return {
+      id:
+        item?.id ||
+        item?.paymentId ||
+        item?.payment_id ||
+        item?.orderId ||
+        item?.order_id ||
+        item?.reportId ||
+        `sale-${index}`,
+      saleDate,
+      dateKey: getDateKey(saleDate),
+      mobile:
+        item?.mobile ||
+        item?.phone ||
+        item?.userPhone ||
+        item?.user_phone ||
+        item?.customerPhone ||
+        item?.customer_phone ||
+        "",
+      name:
+        item?.name ||
+        item?.customerName ||
+        item?.customer_name ||
+        item?.userName ||
+        item?.user_name ||
+        "",
+      reportTitle:
+        item?.reportTitle ||
+        item?.report_title ||
+        item?.reportName ||
+        item?.report_name ||
+        item?.title ||
+        item?.topic ||
+        "Untitled report",
+      reportId: item?.reportId || item?.report_id || item?.slug || item?.reportSlug || "",
+      reportType: item?.reportType || item?.report_type || item?.type || item?.productType || "",
+      amount,
+      status: item?.status || item?.paymentStatus || item?.payment_status || "paid",
+      paymentId: item?.paymentId || item?.payment_id || item?.razorpay_payment_id || "",
+      orderId: item?.orderId || item?.order_id || item?.razorpay_order_id || "",
+      raw: item,
+    };
+  });
+}
+
+function groupSalesByMonthAndDate(items) {
+  const monthMap = new Map();
+
+  [...(items || [])]
+    .sort((a, b) => new Date(b.saleDate || 0) - new Date(a.saleDate || 0))
+    .forEach((sale) => {
+      const dateKey = sale.dateKey || getDateKey(sale.saleDate);
+      const monthKey = getMonthKeyFromDateKey(dateKey);
+
+      if (!monthMap.has(monthKey)) {
+        monthMap.set(monthKey, { monthKey, dates: new Map(), totalAmount: 0, count: 0 });
+      }
+
+      const month = monthMap.get(monthKey);
+      month.totalAmount += toAmountNumber(sale.amount);
+      month.count += 1;
+
+      if (!month.dates.has(dateKey)) {
+        month.dates.set(dateKey, { dateKey, items: [], totalAmount: 0, count: 0 });
+      }
+
+      const dateGroup = month.dates.get(dateKey);
+      dateGroup.items.push(sale);
+      dateGroup.totalAmount += toAmountNumber(sale.amount);
+      dateGroup.count += 1;
+    });
+
+  return Array.from(monthMap.values()).map((month) => ({
+    monthKey: month.monthKey,
+    label: formatMonthGroupLabel(month.monthKey),
+    totalAmount: month.totalAmount,
+    count: month.count,
+    dates: Array.from(month.dates.values()).map((dateGroup) => ({
+      ...dateGroup,
+      label: formatDateGroupLabel(dateGroup.dateKey),
+    })),
+  }));
+}
+
 export default function App() {
   const CONFIRM_API = import.meta.env.VITE_CONFIRM_API;
   const STATUS_API = import.meta.env.VITE_STATUS_API;
@@ -507,6 +669,7 @@ export default function App() {
   const PREBOOK_PRESIGN_API = import.meta.env.VITE_PREBOOK_PRESIGN_API || PRESIGN_API;
   const PREBOOK_PUBLISH_API = "https://jp1bupouyl.execute-api.ap-south-1.amazonaws.com/prod/prebook/publish";
   const CATALOG_API = import.meta.env.VITE_CATALOG_API || "";
+  const SALES_API = import.meta.env.VITE_SALES_API || "";
   const SUGGEST_API = "https://vtwyu7hv50.execute-api.ap-south-1.amazonaws.com/default/suggest";
   const SUGGEST_PREVIEW_API = "https://vtwyu7hv50.execute-api.ap-south-1.amazonaws.com/default/RBR_report_pre-signed_URL";
 
@@ -523,6 +686,7 @@ export default function App() {
   const [mappingSeed, setMappingSeed] = useState(null);
   const isPrebook = activeTab === "prebook";
   const isCatalog = activeTab === "catalog";
+  const isSales = activeTab === "sales";
   const isInstantAdmin = activeTab === "instant" && instantAdminTab !== "generate";
 
   const theme = useMemo(() => {
@@ -612,6 +776,13 @@ export default function App() {
   const [catalogError, setCatalogError] = useState("");
   const [catalogItems, setCatalogItems] = useState([]);
   const [catalogMeta, setCatalogMeta] = useState({ total: 0, source: "" });
+  const [salesItems, setSalesItems] = useState([]);
+  const [salesLoading, setSalesLoading] = useState(false);
+  const [salesError, setSalesError] = useState("");
+  const [salesSearch, setSalesSearch] = useState("");
+  const [expandedSaleMonths, setExpandedSaleMonths] = useState({});
+  const [expandedSaleDates, setExpandedSaleDates] = useState({});
+  const [salesMeta, setSalesMeta] = useState({ total: 0, source: "" });
   const [suggestTesterQuery, setSuggestTesterQuery] = useState("");
   const [suggestLoading, setSuggestLoading] = useState(false);
   const [suggestError, setSuggestError] = useState("");
@@ -724,6 +895,11 @@ export default function App() {
     loadCatalog();
   }, [activeTab]);
 
+  useEffect(() => {
+    if (activeTab !== "sales") return;
+    loadSales();
+  }, [activeTab]);
+
   const activeHistory = activeTab === "instant" ? history : activeTab === "prebook" ? prebookHistory : [];
   const leftSelId = activeTab === "instant" ? leftId : activeTab === "prebook" ? preLeftId : null;
   const rightSelId = activeTab === "instant" ? rightId : activeTab === "prebook" ? preRightId : null;
@@ -757,6 +933,33 @@ export default function App() {
   const groupedFilteredHistory = useMemo(() => {
     return groupHistoryByDate(filteredHistory);
   }, [filteredHistory]);
+
+  const filteredSalesItems = useMemo(() => {
+    const q = normalize(salesSearch);
+    if (!q) return salesItems;
+    return salesItems.filter((sale) =>
+      [
+        sale.mobile,
+        sale.name,
+        sale.reportTitle,
+        sale.reportId,
+        sale.reportType,
+        sale.paymentId,
+        sale.orderId,
+        sale.status,
+      ]
+        .map(normalize)
+        .some((value) => value.includes(q))
+    );
+  }, [salesItems, salesSearch]);
+
+  const groupedSales = useMemo(() => {
+    return groupSalesByMonthAndDate(filteredSalesItems);
+  }, [filteredSalesItems]);
+
+  const salesTotalAmount = useMemo(() => {
+    return filteredSalesItems.reduce((sum, sale) => sum + toAmountNumber(sale.amount), 0);
+  }, [filteredSalesItems]);
 
   const activeTemplateStats = useMemo(
     () => templateStats(selectedOrDefaultPrebookTemplate),
@@ -1932,6 +2135,57 @@ export default function App() {
     }
   }
 
+  async function loadSales() {
+    setSalesLoading(true);
+    setSalesError("");
+
+    if (!SALES_API) {
+      setSalesItems([]);
+      setSalesMeta({ total: 0, source: "" });
+      setSalesLoading(false);
+      setSalesError("Missing env var: VITE_SALES_API. Add your sales-list Lambda/API Gateway URL in Amplify env vars and redeploy.");
+      return;
+    }
+
+    try {
+      const { res, data } = await fetchJson(SALES_API, {
+        method: "GET",
+        headers: { "Content-Type": "application/json" },
+      });
+
+      if (!res.ok || data?.ok === false) {
+        throw new Error(buildErrorMessage(res, data, "Sales API failed"));
+      }
+
+      const items = normalizeSalesPayload(data);
+      setSalesItems(items);
+      setSalesMeta({
+        total: Number(data?.total || data?.count || items.length || 0),
+        source: data?.source || "sales_api",
+      });
+    } catch (e) {
+      setSalesItems([]);
+      setSalesMeta({ total: 0, source: "" });
+      setSalesError(e?.message || "Failed to load sales");
+    } finally {
+      setSalesLoading(false);
+    }
+  }
+
+  function toggleSaleMonth(monthKey) {
+    setExpandedSaleMonths((prev) => ({
+      ...prev,
+      [monthKey]: prev[monthKey] !== undefined ? !prev[monthKey] : false,
+    }));
+  }
+
+  function toggleSaleDate(dateKey) {
+    setExpandedSaleDates((prev) => ({
+      ...prev,
+      [dateKey]: prev[dateKey] !== undefined ? !prev[dateKey] : false,
+    }));
+  }
+
   async function runSuggestionTest(queryOverride) {
     const q = String(queryOverride ?? suggestTesterQuery ?? "").trim();
     setSuggestTesterQuery(q);
@@ -2809,6 +3063,25 @@ export default function App() {
               >
                 Catalog & Suggestions
               </button>
+              <button
+                type="button"
+                className="chipPill"
+                onClick={() => setActiveTab("sales")}
+                style={{
+                  border:
+                    activeTab === "sales"
+                      ? "1px solid rgba(245,158,11,0.48)"
+                      : "1px solid rgba(255,255,255,0.14)",
+                  background:
+                    activeTab === "sales" ? "rgba(245,158,11,0.16)" : "rgba(255,255,255,0.08)",
+                  color:
+                    activeTab === "sales"
+                      ? "rgba(254,243,199,0.98)"
+                      : "rgba(255,255,255,0.88)",
+                }}
+              >
+                Sales
+              </button>
             </div>
 
             {activeTab === "instant" ? (
@@ -3403,8 +3676,8 @@ export default function App() {
           </>
         ) : null}
 
-        <div className={clsx("body", (leftHidden || isPrebook || isCatalog || isInstantAdmin) && "bodyFull")}>
-          {!leftHidden && !isPrebook && !isCatalog && !isInstantAdmin ? (
+        <div className={clsx("body", (leftHidden || isPrebook || isCatalog || isSales || isInstantAdmin) && "bodyFull")}>
+          {!leftHidden && !isPrebook && !isCatalog && !isSales && !isInstantAdmin ? (
             <aside className="left">
               <div className="panelScroll">
                 <div className="card glass">
@@ -3507,7 +3780,24 @@ export default function App() {
           ) : null}
 
           <main className="right">
-            {isCatalog ? (
+            {isSales ? (
+              <SalesPanel
+                groupedSales={groupedSales}
+                salesItems={filteredSalesItems}
+                salesTotalAmount={salesTotalAmount}
+                salesLoading={salesLoading}
+                salesError={salesError}
+                salesSearch={salesSearch}
+                setSalesSearch={setSalesSearch}
+                loadSales={loadSales}
+                expandedSaleMonths={expandedSaleMonths}
+                expandedSaleDates={expandedSaleDates}
+                toggleSaleMonth={toggleSaleMonth}
+                toggleSaleDate={toggleSaleDate}
+                salesMeta={salesMeta}
+                copyToClipboard={copyToClipboard}
+              />
+            ) : isCatalog ? (
               <CatalogSuggestionsPanel
                 catalogSearch={catalogSearch}
                 setCatalogSearch={setCatalogSearch}
@@ -3613,7 +3903,7 @@ export default function App() {
               </div>
             ) : null}
 
-            {!isCatalog && !isInstantAdmin ? (
+            {!isCatalog && !isSales && !isInstantAdmin ? (
               <>
                 <div className="compareHeader">
                   <div className="compareTitleRow">
@@ -3638,7 +3928,9 @@ export default function App() {
         </div>
 
         <footer className="footer">
-          {isCatalog
+          {isSales
+            ? "Tip: Expand a month, then expand a sale date to audit each purchase with customer and report details."
+            : isCatalog
             ? "Tip: Use this tab to compare catalog records against live /suggest output and improve relevance."
             : isInstantAdmin
             ? "Tip: Keep search mappings curated. They control which importer categories appear in instant reports."
@@ -4245,6 +4537,265 @@ function CatalogSuggestionsPanel({
             ))}
           </div>
         )}
+      </div>
+    </div>
+  );
+}
+
+
+function SalesPanel({
+  groupedSales,
+  salesItems,
+  salesTotalAmount,
+  salesLoading,
+  salesError,
+  salesSearch,
+  setSalesSearch,
+  loadSales,
+  expandedSaleMonths,
+  expandedSaleDates,
+  toggleSaleMonth,
+  toggleSaleDate,
+  salesMeta,
+  copyToClipboard,
+}) {
+  return (
+    <div className="card glass" style={{ border: "1px solid rgba(245,158,11,0.28)", background: "rgba(20,14,6,0.42)" }}>
+      <div className="cardTitleRow">
+        <div>
+          <div className="cardTitle">Sales Dashboard</div>
+          <div className="mutedSmall">Grouped by month/year → date of sale → individual sale details.</div>
+        </div>
+        <div className="rowActions">
+          <button className="linkBtn" onClick={loadSales} type="button">
+            {salesLoading ? "Refreshing…" : "Refresh sales"}
+          </button>
+        </div>
+      </div>
+
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: "repeat(3, minmax(160px, 1fr))",
+          gap: 12,
+          marginTop: 14,
+        }}
+      >
+        <div className="card" style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.10)" }}>
+          <div className="mutedSmall">Total sales shown</div>
+          <div className="mono" style={{ fontSize: 22, marginTop: 4 }}>{salesItems.length}</div>
+        </div>
+        <div className="card" style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.10)" }}>
+          <div className="mutedSmall">Total amount shown</div>
+          <div className="mono" style={{ fontSize: 22, marginTop: 4 }}>{formatInr(salesTotalAmount)}</div>
+        </div>
+        <div className="card" style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.10)" }}>
+          <div className="mutedSmall">API source</div>
+          <div className="mono" style={{ fontSize: 14, marginTop: 8 }}>{salesMeta?.source || "-"}</div>
+        </div>
+      </div>
+
+      <div className="historyTools" style={{ marginTop: 14 }}>
+        <input
+          className="input inputSm"
+          value={salesSearch}
+          onChange={(e) => setSalesSearch(e.target.value)}
+          placeholder="Search mobile / name / report / payment ID…"
+        />
+        <button className="btnSecondary" onClick={() => setSalesSearch("")} type="button">
+          Clear
+        </button>
+      </div>
+
+      {salesError ? <div className="errorBox">Error: {salesError}</div> : null}
+
+      {salesLoading && !salesItems.length ? (
+        <div className="empty fancyEmpty" style={{ marginTop: 12 }}>
+          <div className="emptyIcon">💳</div>
+          <div className="emptyTitle">Loading sales…</div>
+          <div className="mutedSmall">Fetching the latest payment records.</div>
+        </div>
+      ) : null}
+
+      {!salesLoading && !groupedSales.length ? (
+        <div className="empty fancyEmpty" style={{ marginTop: 12 }}>
+          <div className="emptyIcon">🧾</div>
+          <div className="emptyTitle">No sales found</div>
+          <div className="mutedSmall">
+            Add VITE_SALES_API or clear the search filter to view purchase records.
+          </div>
+        </div>
+      ) : null}
+
+      <div style={{ display: "grid", gap: 12, marginTop: 14 }}>
+        {groupedSales.map((month, monthIndex) => {
+          const monthOpen =
+            expandedSaleMonths[month.monthKey] !== undefined
+              ? expandedSaleMonths[month.monthKey]
+              : monthIndex === 0;
+
+          return (
+            <div
+              key={month.monthKey}
+              className="card"
+              style={{
+                border: "1px solid rgba(245,158,11,0.26)",
+                background: "rgba(245,158,11,0.045)",
+                overflow: "hidden",
+              }}
+            >
+              <button
+                type="button"
+                onClick={() => toggleSaleMonth(month.monthKey)}
+                style={{
+                  width: "100%",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  gap: 12,
+                  padding: "14px 16px",
+                  background: monthOpen
+                    ? "linear-gradient(180deg, rgba(245,158,11,0.20), rgba(245,158,11,0.10))"
+                    : "linear-gradient(180deg, rgba(245,158,11,0.12), rgba(245,158,11,0.06))",
+                  border: "none",
+                  borderBottom: monthOpen ? "1px solid rgba(245,158,11,0.26)" : "none",
+                  color: "rgba(255,255,255,0.96)",
+                  cursor: "pointer",
+                  textAlign: "left",
+                }}
+              >
+                <div>
+                  <div style={{ fontWeight: 800 }}>{month.label}</div>
+                  <div className="mutedSmall">
+                    {month.count} sale{month.count > 1 ? "s" : ""} • {formatInr(month.totalAmount)}
+                  </div>
+                </div>
+                <div style={{ fontSize: 18, transform: monthOpen ? "rotate(0deg)" : "rotate(-90deg)", transition: "transform 160ms ease" }}>
+                  ▾
+                </div>
+              </button>
+
+              {monthOpen ? (
+                <div style={{ display: "grid", gap: 10, padding: 12 }}>
+                  {month.dates.map((dateGroup, dateIndex) => {
+                    const dateOpen =
+                      expandedSaleDates[dateGroup.dateKey] !== undefined
+                        ? expandedSaleDates[dateGroup.dateKey]
+                        : monthIndex === 0 && dateIndex === 0;
+
+                    return (
+                      <div
+                        key={dateGroup.dateKey}
+                        className="card"
+                        style={{
+                          border: "1px solid rgba(255,255,255,0.10)",
+                          background: "rgba(255,255,255,0.035)",
+                          overflow: "hidden",
+                        }}
+                      >
+                        <button
+                          type="button"
+                          onClick={() => toggleSaleDate(dateGroup.dateKey)}
+                          style={{
+                            width: "100%",
+                            display: "flex",
+                            alignItems: "center",
+                            justifyContent: "space-between",
+                            gap: 12,
+                            padding: "12px 14px",
+                            background: dateOpen ? "rgba(255,255,255,0.06)" : "rgba(255,255,255,0.025)",
+                            border: "none",
+                            borderBottom: dateOpen ? "1px solid rgba(255,255,255,0.10)" : "none",
+                            color: "rgba(255,255,255,0.94)",
+                            cursor: "pointer",
+                            textAlign: "left",
+                          }}
+                        >
+                          <div>
+                            <div style={{ fontWeight: 700 }}>{dateGroup.label}</div>
+                            <div className="mutedSmall">
+                              {dateGroup.count} sale{dateGroup.count > 1 ? "s" : ""} • {formatInr(dateGroup.totalAmount)}
+                            </div>
+                          </div>
+                          <div style={{ fontSize: 16, transform: dateOpen ? "rotate(0deg)" : "rotate(-90deg)", transition: "transform 160ms ease" }}>
+                            ▾
+                          </div>
+                        </button>
+
+                        {dateOpen ? (
+                          <div style={{ padding: 12 }}>
+                            <div className="tableWrap">
+                              <table className="table">
+                                <thead>
+                                  <tr>
+                                    <th style={{ width: 150 }}>Time</th>
+                                    <th style={{ width: 140 }}>Mobile</th>
+                                    <th style={{ width: 170 }}>Name</th>
+                                    <th>Report details</th>
+                                    <th style={{ width: 110 }}>Amount</th>
+                                    <th style={{ width: 105 }}>Status</th>
+                                    <th style={{ width: 220 }}>Payment</th>
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {dateGroup.items.map((sale) => {
+                                    const dt = sale.saleDate ? new Date(sale.saleDate) : null;
+                                    const timeStr = dt && !Number.isNaN(dt.getTime()) ? dt.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "-";
+                                    const st = prettyStatus(sale.status);
+
+                                    return (
+                                      <tr key={sale.id} className="row">
+                                        <td className="mono">{timeStr}</td>
+                                        <td className="mono">
+                                          <div className="monoRow">
+                                            <span>{sale.mobile || "-"}</span>
+                                            {sale.mobile ? (
+                                              <button className="miniBtn" onClick={() => copyToClipboard(sale.mobile)} type="button">
+                                                Copy
+                                              </button>
+                                            ) : null}
+                                          </div>
+                                        </td>
+                                        <td>{sale.name || "-"}</td>
+                                        <td>
+                                          <div className="titleCell">{sale.reportTitle}</div>
+                                          <div className="mutedSmall">
+                                            {[sale.reportType, sale.reportId].filter(Boolean).join(" • ") || "-"}
+                                          </div>
+                                        </td>
+                                        <td className="mono">{formatInr(sale.amount)}</td>
+                                        <td>
+                                          <span className={clsx("badge", `st-${st}`)}>{sale.status || "paid"}</span>
+                                        </td>
+                                        <td className="mono">
+                                          <div>{sale.paymentId || sale.orderId || "-"}</div>
+                                          {(sale.paymentId || sale.orderId) ? (
+                                            <button
+                                              className="miniBtn"
+                                              style={{ marginTop: 6 }}
+                                              onClick={() => copyToClipboard(sale.paymentId || sale.orderId)}
+                                              type="button"
+                                            >
+                                              Copy ID
+                                            </button>
+                                          ) : null}
+                                        </td>
+                                      </tr>
+                                    );
+                                  })}
+                                </tbody>
+                              </table>
+                            </div>
+                          </div>
+                        ) : null}
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : null}
+            </div>
+          );
+        })}
       </div>
     </div>
   );
