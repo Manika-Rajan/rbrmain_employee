@@ -3404,36 +3404,66 @@ export default function App() {
 
             {activeTab === "instant" ? (
               <>
-                <div className="quickChips">
-                  {[
-                    ["generate", "Generate Report"],
-                    ["mapping", "Search Term Mapping"],
-                    ["companies", "Importer Database"],
-                    ["analytics", "Search Analytics"],
-                  ].map(([key, label]) => (
-                    <button
-                      key={key}
-                      className="chipPill"
-                      onClick={() => setInstantAdminTab(key)}
-                      type="button"
-                      style={{
-                        border:
-                          instantAdminTab === key
-                            ? "1px solid rgba(37,99,235,0.62)"
-                            : "1px solid rgba(255,255,255,0.14)",
-                        background:
-                          instantAdminTab === key
-                            ? "rgba(37,99,235,0.22)"
-                            : "rgba(255,255,255,0.08)",
-                        color:
-                          instantAdminTab === key
-                            ? "rgba(219,234,254,0.98)"
-                            : "rgba(255,255,255,0.88)",
-                      }}
-                    >
-                      {label}
-                    </button>
-                  ))}
+                <div
+                  style={{
+                    marginTop: 10,
+                    padding: "10px 12px",
+                    border: "1px solid rgba(255,255,255,0.10)",
+                    borderRadius: 18,
+                    background: "rgba(255,255,255,0.045)",
+                  }}
+                >
+                  <div
+                    style={{
+                      fontSize: 11,
+                      letterSpacing: "0.08em",
+                      textTransform: "uppercase",
+                      color: "rgba(255,255,255,0.48)",
+                      margin: "0 0 8px 4px",
+                      fontWeight: 800,
+                    }}
+                  >
+                    Instant Report Work Desk tools
+                  </div>
+
+                  <div className="quickChips" style={{ marginTop: 0, gap: 8 }}>
+                    {[
+                      ["generate", "Generate Report"],
+                      ["mapping", "Search Term Mapping"],
+                      ["companies", "Importer Database"],
+                      ["analytics", "Search Analytics"],
+                    ].map(([key, label]) => (
+                      <button
+                        key={key}
+                        className="chipPill"
+                        onClick={() => setInstantAdminTab(key)}
+                        type="button"
+                        style={{
+                          fontSize: 12,
+                          padding: "7px 11px",
+                          borderRadius: 12,
+                          border:
+                            instantAdminTab === key
+                              ? "1px solid rgba(96,165,250,0.48)"
+                              : "1px solid rgba(255,255,255,0.10)",
+                          background:
+                            instantAdminTab === key
+                              ? "linear-gradient(180deg, rgba(37,99,235,0.22), rgba(37,99,235,0.10))"
+                              : "rgba(255,255,255,0.035)",
+                          color:
+                            instantAdminTab === key
+                              ? "rgba(219,234,254,0.98)"
+                              : "rgba(255,255,255,0.66)",
+                          boxShadow:
+                            instantAdminTab === key
+                              ? "inset 0 -2px 0 rgba(96,165,250,0.55)"
+                              : "none",
+                        }}
+                      >
+                        {label}
+                      </button>
+                    ))}
+                  </div>
                 </div>
 
                 {QUICK_TOPICS.length ? (
