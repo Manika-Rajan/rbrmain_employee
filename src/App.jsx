@@ -619,6 +619,149 @@ function normalizeSalesPayload(payload) {
   });
 }
 
+function getAdsDateValue(item = {}) {
+  return (
+    item.date ||
+    item.dateKey ||
+    item.date_key ||
+    item.day ||
+    item.pulledAt ||
+    item.pulled_at ||
+    item.updatedAt ||
+    item.updated_at ||
+    item.createdAt ||
+    item.created_at ||
+    ""
+  );
+}
+
+function formatNumberCompact(value) {
+  const n = Number(value || 0);
+  if (!Number.isFinite(n)) return "0";
+  try {
+    return new Intl.NumberFormat("en-IN", { maximumFractionDigits: 1 }).format(n);
+  } catch {
+    return String(n);
+  }
+}
+
+function toStringList(value) {
+  if (Array.isArray(value)) return value.map((x) => String(x || "").trim()).filter(Boolean);
+  if (typeof value === "string") {
+    return value
+      .split(/[|,\n]/g)
+      .map((x) => x.trim())
+      .filter(Boolean);
+  }
+  return [];
+}
+
+function normalizeAdsQuality(item = {}) {
+  const q = pickLoose(
+    item.quality,
+    item.trafficQuality,
+    item.traffic_quality,
+    item.intent,
+    item.classification,
+    ""
+  );
+  if (q) return q;
+  const sales = Number(item.sales || item.sale_count || item.saleCount || 0);
+  const leads = Number(item.leads || item.lead_count || item.leadCount || 0);
+  const websiteSearches = toStringList(
+    item.websiteSearchTerms || item.website_search_terms || item.websiteSearches || item.website_searches
+  ).length;
+  const term = normalize(item.searchTerm || item.search_term || item.query || "");
+  if (sales > 0) return "Converted";
+  if (leads > 0) return "Warm";
+  if (websiteSearches > 0) return "Interested";
+  if (["free", "pdf", "project", "student", "job", "salary"].some((x) => term.includes(x))) return "Low intent";
+  return "Needs review";
+}
+
+function pickLoose(...values) {
+  for (const value of values) {
+    if (value !== undefined && value !== null && value !== "") return value;
+  }
+  return "";
+}
+
+function normalizeAdsIntelligencePayload(payload) {
+  const parsed = payload && typeof payload.body === "string" ? JSON.parse(payload.body) : payload;
+  const rawItems = Array.isArray(parsed)
+    ? parsed
+    : Array.isArray(parsed?.items)
+    ? parsed.items
+    : Array.isArray(parsed?.rows)
+    ? parsed.rows
+    : Array.isArray(parsed?.results)
+    ? parsed.results
+    : Array.isArray(parsed?.data)
+    ? parsed.data
+    : [];
+
+  return rawItems.map((item, index) => {
+    const dateValue = getAdsDateValue(item);
+    const websiteTerms = toStringList(
+      pickLoose(
+        item.websiteSearchTerms,
+        item.website_search_terms,
+        item.websiteSearches,
+        item.website_searches,
+        item.siteSearchTerms,
+        item.site_search_terms,
+        item.contextSearched,
+        item.context_searched
+      )
+    );
+    const searchTerm = pickLoose(
+      item.searchTerm,
+      item.search_term,
+      item.googleSearchTerm,
+      item.google_search_term,
+      item.query,
+      item.userQuery
+    );
+    const keyword = pickLoose(item.keyword, item.adKeyword, item.ad_keyword, item.googleKeyword, item.google_keyword);
+    const clicks = Number(pickLoose(item.clicks, item.click_count, item.clickCount, 0)) || 0;
+    const cost = toAmountNumber(pickLoose(item.cost, item.spend, item.amountSpent, item.amount_spent, 0));
+    const leads = Number(pickLoose(item.leads, item.lead_count, item.leadCount, 0)) || 0;
+    const sales = Number(pickLoose(item.sales, item.sale_count, item.saleCount, item.conversions, 0)) || 0;
+    const revenue = toAmountNumber(pickLoose(item.revenue, item.salesValue, item.sales_value, item.conversionValue, item.conversion_value, 0));
+
+    return {
+      id: pickLoose(item.id, item.trafficId, item.traffic_id, item.rowId, `${dateValue || "ads"}-${index}`),
+      date: dateValue,
+      dateKey: getDateKey(dateValue),
+      campaign: pickLoose(item.campaign, item.campaignName, item.campaign_name, "-"),
+      adGroup: pickLoose(item.adGroup, item.ad_group, item.adGroupName, item.ad_group_name, "-"),
+      keyword: keyword || "-",
+      matchType: pickLoose(item.matchType, item.match_type, item.keywordMatchType, item.keyword_match_type, ""),
+      searchTerm: searchTerm || "-",
+      websiteSearchTerms: websiteTerms,
+      websiteContext: pickLoose(item.websiteContext, item.website_context, item.context, item.pageContext, item.page_context, ""),
+      matchedReportSlug: pickLoose(item.matchedReportSlug, item.matched_report_slug, item.reportSlug, item.report_slug, ""),
+      device: pickLoose(item.device, item.deviceType, item.device_type, "-"),
+      clicks,
+      impressions: Number(pickLoose(item.impressions, item.impression_count, item.impressionCount, 0)) || 0,
+      cost,
+      leads,
+      sales,
+      revenue,
+      quality: normalizeAdsQuality({ ...item, sales, leads, websiteSearchTerms: websiteTerms }),
+      actionSuggestion: pickLoose(item.actionSuggestion, item.action_suggestion, item.suggestion, item.recommendation, ""),
+      lastPulledAt: pickLoose(item.lastPulledAt, item.last_pulled_at, item.pulledAt, item.pulled_at, parsed?.lastPulledAt, parsed?.last_pulled_at, ""),
+      raw: item,
+    };
+  });
+}
+
+function getAdsQualityClass(value) {
+  const q = normalize(value).replace(/\s+/g, "-");
+  return q ? `st-${q}` : "st-unknown";
+}
+
+
 function groupSalesByMonthAndDate(items) {
   const monthMap = new Map();
 
@@ -670,6 +813,8 @@ export default function App() {
   const PREBOOK_PUBLISH_API = "https://jp1bupouyl.execute-api.ap-south-1.amazonaws.com/prod/prebook/publish";
   const CATALOG_API = import.meta.env.VITE_CATALOG_API || "";
   const SALES_API = import.meta.env.VITE_SALES_API || "";
+  const ADS_INTELLIGENCE_API = import.meta.env.VITE_ADS_INTELLIGENCE_API || "";
+  const GOOGLE_ADS_UPDATE_API = import.meta.env.VITE_GOOGLE_ADS_UPDATE_API || "";
   const SUGGEST_API = "https://vtwyu7hv50.execute-api.ap-south-1.amazonaws.com/default/suggest";
   const SUGGEST_PREVIEW_API = "https://vtwyu7hv50.execute-api.ap-south-1.amazonaws.com/default/RBR_report_pre-signed_URL";
 
@@ -687,6 +832,7 @@ export default function App() {
   const isPrebook = activeTab === "prebook";
   const isCatalog = activeTab === "catalog";
   const isSales = activeTab === "sales";
+  const isAdsIntelligence = activeTab === "ads-intelligence";
   const isInstantAdmin = activeTab === "instant" && instantAdminTab !== "generate";
 
   const theme = useMemo(() => {
@@ -783,6 +929,15 @@ export default function App() {
   const [expandedSaleMonths, setExpandedSaleMonths] = useState({});
   const [expandedSaleDates, setExpandedSaleDates] = useState({});
   const [salesMeta, setSalesMeta] = useState({ total: 0, source: "" });
+  const [adsItems, setAdsItems] = useState([]);
+  const [adsLoading, setAdsLoading] = useState(false);
+  const [adsUpdating, setAdsUpdating] = useState(false);
+  const [adsError, setAdsError] = useState("");
+  const [adsSearch, setAdsSearch] = useState("");
+  const [adsQualityFilter, setAdsQualityFilter] = useState("all");
+  const [adsDeviceFilter, setAdsDeviceFilter] = useState("all");
+  const [expandedAdsRows, setExpandedAdsRows] = useState({});
+  const [adsMeta, setAdsMeta] = useState({ total: 0, source: "", lastPulledAt: "" });
   const [suggestTesterQuery, setSuggestTesterQuery] = useState("");
   const [suggestLoading, setSuggestLoading] = useState(false);
   const [suggestError, setSuggestError] = useState("");
@@ -900,6 +1055,11 @@ export default function App() {
     loadSales();
   }, [activeTab]);
 
+  useEffect(() => {
+    if (activeTab !== "ads-intelligence") return;
+    loadAdsIntelligence();
+  }, [activeTab]);
+
   const activeHistory = activeTab === "instant" ? history : activeTab === "prebook" ? prebookHistory : [];
   const leftSelId = activeTab === "instant" ? leftId : activeTab === "prebook" ? preLeftId : null;
   const rightSelId = activeTab === "instant" ? rightId : activeTab === "prebook" ? preRightId : null;
@@ -960,6 +1120,58 @@ export default function App() {
   const salesTotalAmount = useMemo(() => {
     return filteredSalesItems.reduce((sum, sale) => sum + toAmountNumber(sale.amount), 0);
   }, [filteredSalesItems]);
+
+
+  const filteredAdsItems = useMemo(() => {
+    const q = normalize(adsSearch);
+    const quality = normalize(adsQualityFilter);
+    const device = normalize(adsDeviceFilter);
+    return adsItems.filter((item) => {
+      const matchesSearch =
+        !q ||
+        [
+          item.campaign,
+          item.adGroup,
+          item.keyword,
+          item.searchTerm,
+          item.websiteContext,
+          item.matchedReportSlug,
+          item.device,
+          item.quality,
+          item.actionSuggestion,
+          ...(item.websiteSearchTerms || []),
+        ]
+          .map(normalize)
+          .some((value) => value.includes(q));
+      const matchesQuality = quality === "all" ? true : normalize(item.quality) === quality;
+      const matchesDevice = device === "all" ? true : normalize(item.device) === device;
+      return matchesSearch && matchesQuality && matchesDevice;
+    });
+  }, [adsItems, adsSearch, adsQualityFilter, adsDeviceFilter]);
+
+  const adsSummary = useMemo(() => {
+    return filteredAdsItems.reduce(
+      (acc, item) => {
+        acc.clicks += Number(item.clicks || 0);
+        acc.impressions += Number(item.impressions || 0);
+        acc.cost += toAmountNumber(item.cost);
+        acc.leads += Number(item.leads || 0);
+        acc.sales += Number(item.sales || 0);
+        acc.revenue += toAmountNumber(item.revenue);
+        acc.websiteSearches += (item.websiteSearchTerms || []).length || (item.websiteContext ? 1 : 0);
+        return acc;
+      },
+      { clicks: 0, impressions: 0, cost: 0, leads: 0, sales: 0, revenue: 0, websiteSearches: 0 }
+    );
+  }, [filteredAdsItems]);
+
+  const adsQualityOptions = useMemo(() => {
+    return ["all", ...Array.from(new Set(adsItems.map((x) => x.quality).filter(Boolean)))];
+  }, [adsItems]);
+
+  const adsDeviceOptions = useMemo(() => {
+    return ["all", ...Array.from(new Set(adsItems.map((x) => x.device).filter(Boolean)))];
+  }, [adsItems]);
 
   const activeTemplateStats = useMemo(
     () => templateStats(selectedOrDefaultPrebookTemplate),
@@ -2186,6 +2398,93 @@ export default function App() {
     }));
   }
 
+  async function loadAdsIntelligence() {
+    setAdsLoading(true);
+    setAdsError("");
+
+    if (!ADS_INTELLIGENCE_API) {
+      setAdsItems([]);
+      setAdsMeta({ total: 0, source: "", lastPulledAt: "" });
+      setAdsLoading(false);
+      setAdsError("Missing env var: VITE_ADS_INTELLIGENCE_API. Add your ads-intelligence list Lambda/API Gateway URL in Amplify env vars and redeploy.");
+      return;
+    }
+
+    try {
+      const { res, data } = await fetchJson(ADS_INTELLIGENCE_API, {
+        method: "GET",
+        headers: { "Content-Type": "application/json" },
+      });
+
+      if (!res.ok || data?.ok === false) {
+        throw new Error(buildErrorMessage(res, data, "Ads Intelligence API failed"));
+      }
+
+      const items = normalizeAdsIntelligencePayload(data);
+      setAdsItems(items);
+      setAdsMeta({
+        total: Number(data?.total || data?.count || items.length || 0),
+        source: data?.source || "ads_intelligence_api",
+        lastPulledAt: data?.lastPulledAt || data?.last_pulled_at || items.find((x) => x.lastPulledAt)?.lastPulledAt || "",
+      });
+    } catch (e) {
+      setAdsItems([]);
+      setAdsMeta({ total: 0, source: "", lastPulledAt: "" });
+      setAdsError(e?.message || "Failed to load Ads Intelligence data");
+    } finally {
+      setAdsLoading(false);
+    }
+  }
+
+  async function updateGoogleAdsDetails() {
+    setAdsUpdating(true);
+    setAdsError("");
+
+    if (!GOOGLE_ADS_UPDATE_API) {
+      setAdsUpdating(false);
+      setAdsError("Missing env var: VITE_GOOGLE_ADS_UPDATE_API. Add your manual Google Ads pull Lambda/API Gateway URL in Amplify env vars and redeploy.");
+      return;
+    }
+
+    try {
+      const { res, data } = await fetchJson(GOOGLE_ADS_UPDATE_API, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ requestedAt: nowIso(), source: "employee_ads_intelligence_tab" }),
+      });
+
+      if (!res.ok || data?.ok === false) {
+        throw new Error(buildErrorMessage(res, data, "Google Ads update failed"));
+      }
+
+      const returnedItems = normalizeAdsIntelligencePayload(data);
+      if (returnedItems.length) {
+        setAdsItems(returnedItems);
+        setAdsMeta({
+          total: Number(data?.total || data?.count || returnedItems.length || 0),
+          source: data?.source || "google_ads_update_api",
+          lastPulledAt: data?.lastPulledAt || data?.last_pulled_at || nowIso(),
+        });
+      } else {
+        await loadAdsIntelligence();
+      }
+
+      setToast("Google Ads details updated ✅");
+    } catch (e) {
+      setAdsError(e?.message || "Google Ads update failed");
+      setToast("Google Ads update failed");
+    } finally {
+      setAdsUpdating(false);
+    }
+  }
+
+  function toggleAdsRow(rowId) {
+    setExpandedAdsRows((prev) => ({
+      ...prev,
+      [rowId]: !prev[rowId],
+    }));
+  }
+
   async function runSuggestionTest(queryOverride) {
     const q = String(queryOverride ?? suggestTesterQuery ?? "").trim();
     setSuggestTesterQuery(q);
@@ -3082,6 +3381,25 @@ export default function App() {
               >
                 Sales
               </button>
+              <button
+                type="button"
+                className="chipPill"
+                onClick={() => setActiveTab("ads-intelligence")}
+                style={{
+                  border:
+                    activeTab === "ads-intelligence"
+                      ? "1px solid rgba(14,165,233,0.48)"
+                      : "1px solid rgba(255,255,255,0.14)",
+                  background:
+                    activeTab === "ads-intelligence" ? "rgba(14,165,233,0.16)" : "rgba(255,255,255,0.08)",
+                  color:
+                    activeTab === "ads-intelligence"
+                      ? "rgba(224,242,254,0.98)"
+                      : "rgba(255,255,255,0.88)",
+                }}
+              >
+                Ads Intelligence
+              </button>
             </div>
 
             {activeTab === "instant" ? (
@@ -3676,8 +3994,8 @@ export default function App() {
           </>
         ) : null}
 
-        <div className={clsx("body", (leftHidden || isPrebook || isCatalog || isSales || isInstantAdmin) && "bodyFull")}>
-          {!leftHidden && !isPrebook && !isCatalog && !isSales && !isInstantAdmin ? (
+        <div className={clsx("body", (leftHidden || isPrebook || isCatalog || isSales || isAdsIntelligence || isInstantAdmin) && "bodyFull")}>
+          {!leftHidden && !isPrebook && !isCatalog && !isSales && !isAdsIntelligence && !isInstantAdmin ? (
             <aside className="left">
               <div className="panelScroll">
                 <div className="card glass">
@@ -3780,7 +4098,29 @@ export default function App() {
           ) : null}
 
           <main className="right">
-            {isSales ? (
+            {isAdsIntelligence ? (
+              <AdsIntelligencePanel
+                adsItems={filteredAdsItems}
+                adsSummary={adsSummary}
+                adsLoading={adsLoading}
+                adsUpdating={adsUpdating}
+                adsError={adsError}
+                adsSearch={adsSearch}
+                setAdsSearch={setAdsSearch}
+                adsQualityFilter={adsQualityFilter}
+                setAdsQualityFilter={setAdsQualityFilter}
+                adsDeviceFilter={adsDeviceFilter}
+                setAdsDeviceFilter={setAdsDeviceFilter}
+                adsQualityOptions={adsQualityOptions}
+                adsDeviceOptions={adsDeviceOptions}
+                adsMeta={adsMeta}
+                loadAdsIntelligence={loadAdsIntelligence}
+                updateGoogleAdsDetails={updateGoogleAdsDetails}
+                expandedAdsRows={expandedAdsRows}
+                toggleAdsRow={toggleAdsRow}
+                copyToClipboard={copyToClipboard}
+              />
+            ) : isSales ? (
               <SalesPanel
                 groupedSales={groupedSales}
                 salesItems={filteredSalesItems}
@@ -4542,6 +4882,239 @@ function CatalogSuggestionsPanel({
   );
 }
 
+
+
+function AdsIntelligencePanel({
+  adsItems,
+  adsSummary,
+  adsLoading,
+  adsUpdating,
+  adsError,
+  adsSearch,
+  setAdsSearch,
+  adsQualityFilter,
+  setAdsQualityFilter,
+  adsDeviceFilter,
+  setAdsDeviceFilter,
+  adsQualityOptions,
+  adsDeviceOptions,
+  adsMeta,
+  loadAdsIntelligence,
+  updateGoogleAdsDetails,
+  expandedAdsRows,
+  toggleAdsRow,
+  copyToClipboard,
+}) {
+  const lastPulledLabel = (() => {
+    if (!adsMeta?.lastPulledAt) return "Not available";
+    const d = new Date(adsMeta.lastPulledAt);
+    if (Number.isNaN(d.getTime())) return adsMeta.lastPulledAt;
+    return d.toLocaleString("en-IN", {
+      day: "2-digit",
+      month: "short",
+      year: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: true,
+    });
+  })();
+
+  return (
+    <div className="card glass" style={{ border: "1px solid rgba(14,165,233,0.28)", background: "rgba(6,18,28,0.46)" }}>
+      <div className="cardTitleRow">
+        <div>
+          <div className="cardTitle">Ads Intelligence</div>
+          <div className="mutedSmall">
+            Google Ads keyword → actual search term → website search/context → lead/sale outcome.
+          </div>
+        </div>
+        <div className="rowActions">
+          <button className="btnSecondary" onClick={loadAdsIntelligence} type="button" disabled={adsLoading || adsUpdating}>
+            {adsLoading ? "Refreshing…" : "Refresh view"}
+          </button>
+          <button className="btnPrimary" onClick={updateGoogleAdsDetails} type="button" disabled={adsUpdating || adsLoading}>
+            {adsUpdating ? "Updating Google Ads…" : "Update Google Ads details"}
+          </button>
+        </div>
+      </div>
+
+      <div className="mutedSmall" style={{ marginTop: 8 }}>
+        This page shows data saved from the last pull. Click the update button only when you want today’s Google Ads details until now.
+      </div>
+
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: "repeat(6, minmax(130px, 1fr))",
+          gap: 12,
+          marginTop: 14,
+        }}
+      >
+        {[
+          ["Rows shown", adsItems.length],
+          ["Clicks", formatNumberCompact(adsSummary.clicks)],
+          ["Cost", formatInr(adsSummary.cost)],
+          ["Website searches", formatNumberCompact(adsSummary.websiteSearches)],
+          ["Leads", formatNumberCompact(adsSummary.leads)],
+          ["Sales / Revenue", `${formatNumberCompact(adsSummary.sales)} • ${formatInr(adsSummary.revenue)}`],
+        ].map(([label, value]) => (
+          <div key={label} className="card" style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.10)" }}>
+            <div className="mutedSmall">{label}</div>
+            <div className="mono" style={{ fontSize: 18, marginTop: 6 }}>{value}</div>
+          </div>
+        ))}
+      </div>
+
+      <div className="card" style={{ marginTop: 12, background: "rgba(255,255,255,0.035)", border: "1px solid rgba(255,255,255,0.10)" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
+          <div>
+            <div className="mutedSmall">Last Google Ads pull</div>
+            <div className="mono" style={{ marginTop: 4 }}>{lastPulledLabel}</div>
+          </div>
+          <div>
+            <div className="mutedSmall">API source</div>
+            <div className="mono" style={{ marginTop: 4 }}>{adsMeta?.source || "-"}</div>
+          </div>
+        </div>
+      </div>
+
+      <div className="historyTools" style={{ marginTop: 14, gridTemplateColumns: "minmax(220px, 1.5fr) minmax(150px, 0.6fr) minmax(150px, 0.6fr) auto" }}>
+        <input
+          className="input inputSm"
+          value={adsSearch}
+          onChange={(e) => setAdsSearch(e.target.value)}
+          placeholder="Search keyword / search term / website context / campaign…"
+        />
+        <select className="input inputSm" value={adsQualityFilter} onChange={(e) => setAdsQualityFilter(e.target.value)}>
+          {adsQualityOptions.map((q) => (
+            <option key={q} value={q}>{q === "all" ? "All quality" : q}</option>
+          ))}
+        </select>
+        <select className="input inputSm" value={adsDeviceFilter} onChange={(e) => setAdsDeviceFilter(e.target.value)}>
+          {adsDeviceOptions.map((d) => (
+            <option key={d} value={d}>{d === "all" ? "All devices" : d}</option>
+          ))}
+        </select>
+        <button className="btnSecondary" onClick={() => setAdsSearch("")} type="button">
+          Clear
+        </button>
+      </div>
+
+      {adsError ? <div className="errorBox">Error: {adsError}</div> : null}
+
+      {adsLoading && !adsItems.length ? (
+        <div className="empty fancyEmpty" style={{ marginTop: 12 }}>
+          <div className="emptyIcon">📡</div>
+          <div className="emptyTitle">Loading Ads Intelligence…</div>
+          <div className="mutedSmall">Fetching the last saved Google Ads + website context view.</div>
+        </div>
+      ) : null}
+
+      {!adsLoading && !adsItems.length ? (
+        <div className="empty fancyEmpty" style={{ marginTop: 12 }}>
+          <div className="emptyIcon">🛰️</div>
+          <div className="emptyTitle">No Ads Intelligence rows found</div>
+          <div className="mutedSmall">
+            Add VITE_ADS_INTELLIGENCE_API, or click “Update Google Ads details” after adding VITE_GOOGLE_ADS_UPDATE_API.
+          </div>
+        </div>
+      ) : null}
+
+      {adsItems.length ? (
+        <div className="tableWrap" style={{ marginTop: 14 }}>
+          <table className="table">
+            <thead>
+              <tr>
+                <th style={{ width: 108 }}>Date</th>
+                <th style={{ width: 160 }}>Keyword</th>
+                <th>Google search term</th>
+                <th>Website search/context</th>
+                <th style={{ width: 95 }}>Device</th>
+                <th style={{ width: 80 }}>Clicks</th>
+                <th style={{ width: 95 }}>Cost</th>
+                <th style={{ width: 90 }}>Leads</th>
+                <th style={{ width: 95 }}>Sales</th>
+                <th style={{ width: 125 }}>Quality</th>
+                <th style={{ width: 78 }}></th>
+              </tr>
+            </thead>
+            <tbody>
+              {adsItems.map((item) => {
+                const rowOpen = Boolean(expandedAdsRows[item.id]);
+                const dt = item.date ? new Date(item.date) : null;
+                const dateLabel = dt && !Number.isNaN(dt.getTime()) ? dt.toLocaleDateString("en-IN", { day: "2-digit", month: "short" }) : item.dateKey || "-";
+                const websiteLabel = item.websiteSearchTerms?.length
+                  ? item.websiteSearchTerms.slice(0, 2).join(" • ")
+                  : item.websiteContext || item.matchedReportSlug || "-";
+
+                return (
+                  <React.Fragment key={item.id}>
+                    <tr className="row">
+                      <td className="mono">{dateLabel}</td>
+                      <td>
+                        <div className="titleCell">{item.keyword}</div>
+                        <div className="mutedSmall">{item.matchType || item.campaign}</div>
+                      </td>
+                      <td>
+                        <div>{item.searchTerm}</div>
+                        <div className="mutedSmall">{item.adGroup}</div>
+                      </td>
+                      <td>
+                        <div>{websiteLabel}</div>
+                        {item.matchedReportSlug ? <div className="mutedSmall">Matched: {item.matchedReportSlug}</div> : null}
+                      </td>
+                      <td>{item.device}</td>
+                      <td className="mono">{formatNumberCompact(item.clicks)}</td>
+                      <td className="mono">{formatInr(item.cost)}</td>
+                      <td className="mono">{formatNumberCompact(item.leads)}</td>
+                      <td className="mono">{formatNumberCompact(item.sales)} / {formatInr(item.revenue)}</td>
+                      <td>
+                        <span className={clsx("badge", getAdsQualityClass(item.quality))}>{item.quality}</span>
+                      </td>
+                      <td>
+                        <button className="miniBtn" onClick={() => toggleAdsRow(item.id)} type="button">
+                          {rowOpen ? "Hide" : "View"}
+                        </button>
+                      </td>
+                    </tr>
+                    {rowOpen ? (
+                      <tr className="row">
+                        <td colSpan={11}>
+                          <div className="card" style={{ background: "rgba(14,165,233,0.06)", border: "1px solid rgba(14,165,233,0.18)" }}>
+                            <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(180px, 1fr))", gap: 12 }}>
+                              <div>
+                                <div className="mutedSmall">Campaign / Ad group</div>
+                                <div>{item.campaign}</div>
+                                <div className="mutedSmall">{item.adGroup}</div>
+                              </div>
+                              <div>
+                                <div className="mutedSmall">All website search terms</div>
+                                <div>{item.websiteSearchTerms?.length ? item.websiteSearchTerms.join(" • ") : item.websiteContext || "-"}</div>
+                              </div>
+                              <div>
+                                <div className="mutedSmall">Suggested action</div>
+                                <div>{item.actionSuggestion || "Review keyword/search term quality and decide exact keyword, negative keyword, or content idea."}</div>
+                              </div>
+                            </div>
+                            <div style={{ display: "flex", gap: 8, marginTop: 12, flexWrap: "wrap" }}>
+                              <button className="miniBtn" onClick={() => copyToClipboard(item.searchTerm)} type="button">Copy search term</button>
+                              <button className="miniBtn" onClick={() => copyToClipboard(item.keyword)} type="button">Copy keyword</button>
+                              <button className="miniBtn" onClick={() => copyToClipboard(JSON.stringify(item.raw, null, 2))} type="button">Copy raw row</button>
+                            </div>
+                          </div>
+                        </td>
+                      </tr>
+                    ) : null}
+                  </React.Fragment>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      ) : null}
+    </div>
+  );
+}
 
 function SalesPanel({
   groupedSales,
