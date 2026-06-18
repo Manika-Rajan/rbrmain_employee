@@ -813,7 +813,7 @@ export default function App() {
   const PREBOOK_PUBLISH_API = "https://jp1bupouyl.execute-api.ap-south-1.amazonaws.com/prod/prebook/publish";
   const CATALOG_API = import.meta.env.VITE_CATALOG_API || "";
   const SALES_API = import.meta.env.VITE_SALES_API || "";
-  const ADS_INTELLIGENCE_API = import.meta.env.VITE_ADS_INTELLIGENCE_API || "";
+  const TRAFFIC_INTELLIGENCE_API = import.meta.env.VITE_TRAFFIC_INTELLIGENCE_API || "";
   const GOOGLE_ADS_UPDATE_API = import.meta.env.VITE_GOOGLE_ADS_UPDATE_API || "";
   const SUGGEST_API = "https://vtwyu7hv50.execute-api.ap-south-1.amazonaws.com/default/suggest";
   const SUGGEST_PREVIEW_API = "https://vtwyu7hv50.execute-api.ap-south-1.amazonaws.com/default/RBR_report_pre-signed_URL";
@@ -832,7 +832,7 @@ export default function App() {
   const isPrebook = activeTab === "prebook";
   const isCatalog = activeTab === "catalog";
   const isSales = activeTab === "sales";
-  const isAdsIntelligence = activeTab === "ads-intelligence";
+  const isTrafficIntelligence = activeTab === "traffic-intelligence";
   const isInstantAdmin = activeTab === "instant" && instantAdminTab !== "generate";
 
   const theme = useMemo(() => {
@@ -1056,7 +1056,7 @@ export default function App() {
   }, [activeTab]);
 
   useEffect(() => {
-    if (activeTab !== "ads-intelligence") return;
+    if (activeTab !== "traffic-intelligence") return;
     loadAdsIntelligence();
   }, [activeTab]);
 
@@ -2402,22 +2402,22 @@ export default function App() {
     setAdsLoading(true);
     setAdsError("");
 
-    if (!ADS_INTELLIGENCE_API) {
+    if (!TRAFFIC_INTELLIGENCE_API) {
       setAdsItems([]);
       setAdsMeta({ total: 0, source: "", lastPulledAt: "" });
       setAdsLoading(false);
-      setAdsError("Missing env var: VITE_ADS_INTELLIGENCE_API. Add your ads-intelligence list Lambda/API Gateway URL in Amplify env vars and redeploy.");
+      setAdsError("Missing env var: VITE_TRAFFIC_INTELLIGENCE_API. Add your traffic-intelligence list Lambda/API Gateway URL in Amplify env vars and redeploy.");
       return;
     }
 
     try {
-      const { res, data } = await fetchJson(ADS_INTELLIGENCE_API, {
+      const { res, data } = await fetchJson(TRAFFIC_INTELLIGENCE_API, {
         method: "GET",
         headers: { "Content-Type": "application/json" },
       });
 
       if (!res.ok || data?.ok === false) {
-        throw new Error(buildErrorMessage(res, data, "Ads Intelligence API failed"));
+        throw new Error(buildErrorMessage(res, data, "Traffic Intelligence API failed"));
       }
 
       const items = normalizeAdsIntelligencePayload(data);
@@ -2430,7 +2430,7 @@ export default function App() {
     } catch (e) {
       setAdsItems([]);
       setAdsMeta({ total: 0, source: "", lastPulledAt: "" });
-      setAdsError(e?.message || "Failed to load Ads Intelligence data");
+      setAdsError(e?.message || "Failed to load Traffic Intelligence data");
     } finally {
       setAdsLoading(false);
     }
@@ -3384,21 +3384,21 @@ export default function App() {
               <button
                 type="button"
                 className="chipPill"
-                onClick={() => setActiveTab("ads-intelligence")}
+                onClick={() => setActiveTab("traffic-intelligence")}
                 style={{
                   border:
-                    activeTab === "ads-intelligence"
+                    activeTab === "traffic-intelligence"
                       ? "1px solid rgba(14,165,233,0.48)"
                       : "1px solid rgba(255,255,255,0.14)",
                   background:
-                    activeTab === "ads-intelligence" ? "rgba(14,165,233,0.16)" : "rgba(255,255,255,0.08)",
+                    activeTab === "traffic-intelligence" ? "rgba(14,165,233,0.16)" : "rgba(255,255,255,0.08)",
                   color:
-                    activeTab === "ads-intelligence"
+                    activeTab === "traffic-intelligence"
                       ? "rgba(224,242,254,0.98)"
                       : "rgba(255,255,255,0.88)",
                 }}
               >
-                Ads Intelligence
+                Traffic Intelligence
               </button>
             </div>
 
@@ -4024,8 +4024,8 @@ export default function App() {
           </>
         ) : null}
 
-        <div className={clsx("body", (leftHidden || isPrebook || isCatalog || isSales || isAdsIntelligence || isInstantAdmin) && "bodyFull")}>
-          {!leftHidden && !isPrebook && !isCatalog && !isSales && !isAdsIntelligence && !isInstantAdmin ? (
+        <div className={clsx("body", (leftHidden || isPrebook || isCatalog || isSales || isTrafficIntelligence || isInstantAdmin) && "bodyFull")}>
+          {!leftHidden && !isPrebook && !isCatalog && !isSales && !isTrafficIntelligence && !isInstantAdmin ? (
             <aside className="left">
               <div className="panelScroll">
                 <div className="card glass">
@@ -4128,7 +4128,7 @@ export default function App() {
           ) : null}
 
           <main className="right">
-            {isAdsIntelligence ? (
+            {isTrafficIntelligence ? (
               <AdsIntelligencePanel
                 adsItems={filteredAdsItems}
                 adsSummary={adsSummary}
@@ -4273,7 +4273,7 @@ export default function App() {
               </div>
             ) : null}
 
-            {!isCatalog && !isSales && !isAdsIntelligence && !isInstantAdmin ? (
+            {!isCatalog && !isSales && !isTrafficIntelligence && !isInstantAdmin ? (
               <>
                 <div className="compareHeader">
                   <div className="compareTitleRow">
@@ -4953,9 +4953,9 @@ function AdsIntelligencePanel({
     <div className="card glass" style={{ border: "1px solid rgba(14,165,233,0.28)", background: "rgba(6,18,28,0.46)" }}>
       <div className="cardTitleRow">
         <div>
-          <div className="cardTitle">Ads Intelligence</div>
+          <div className="cardTitle">Traffic Intelligence</div>
           <div className="mutedSmall">
-            Google Ads keyword → actual search term → website search/context → lead/sale outcome.
+            Traffic source → campaign/post/keyword → website search/context → lead/sale outcome.
           </div>
         </div>
         <div className="rowActions">
@@ -5035,17 +5035,17 @@ function AdsIntelligencePanel({
       {adsLoading && !adsItems.length ? (
         <div className="empty fancyEmpty" style={{ marginTop: 12 }}>
           <div className="emptyIcon">📡</div>
-          <div className="emptyTitle">Loading Ads Intelligence…</div>
-          <div className="mutedSmall">Fetching the last saved Google Ads + website context view.</div>
+          <div className="emptyTitle">Loading Traffic Intelligence…</div>
+          <div className="mutedSmall">Fetching the last saved traffic + website context view.</div>
         </div>
       ) : null}
 
       {!adsLoading && !adsItems.length ? (
         <div className="empty fancyEmpty" style={{ marginTop: 12 }}>
           <div className="emptyIcon">🛰️</div>
-          <div className="emptyTitle">No Ads Intelligence rows found</div>
+          <div className="emptyTitle">No Traffic Intelligence rows found</div>
           <div className="mutedSmall">
-            Add VITE_ADS_INTELLIGENCE_API, or click “Update Google Ads details” after adding VITE_GOOGLE_ADS_UPDATE_API.
+            Add VITE_TRAFFIC_INTELLIGENCE_API, or click “Update Google Ads details” after adding VITE_GOOGLE_ADS_UPDATE_API.
           </div>
         </div>
       ) : null}
