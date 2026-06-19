@@ -4067,46 +4067,6 @@ export default function App() {
                   {error ? <div className="errorBox">Error: {error}</div> : null}
                 </div>
 
-                <div className="card" style={{ marginTop: 12 }}>
-                  <div className="cardTitleRow">
-                    <div className="cardTitle">Generated Reports (Instant)</div>
-                    <div className="mutedSmall">{activeHistory.length} items</div>
-                  </div>
-
-                  <div className="historyTools">
-                    <input
-                      className="input inputSm"
-                      value={historyQuery}
-                      onChange={(e) => setHistoryQuery(e.target.value)}
-                      placeholder="Search title / topic / instantId…"
-                    />
-                    <select className="select" value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
-                      <option value="all">All</option>
-                      <option value="queued">queued</option>
-                      <option value="running">running</option>
-                      <option value="done">done</option>
-                      <option value="failed">failed</option>
-                      <option value="unknown">unknown</option>
-                    </select>
-                  </div>
-
-                  {!filteredHistory.length ? (
-                    <div className="empty fancyEmpty">
-                      <div className="emptyIcon">📄</div>
-                      <div className="emptyTitle">No matching reports</div>
-                      <div className="mutedSmall">Generate a report, or clear the search/filter.</div>
-                    </div>
-                  ) : (
-                    <HistoryTable
-                      activeTab={activeTab}
-                      filteredHistory={filteredHistory}
-                      copyToClipboard={copyToClipboard}
-                      removeItem={removeItem}
-                      setLeft={setLeft}
-                      setRight={setRight}
-                    />
-                  )}
-                </div>
 
                 {showDebug && lastApiResponse ? (
                   <div className="card" style={{ marginTop: 12 }}>
@@ -4272,6 +4232,49 @@ export default function App() {
                 ) : null}
               </div>
             ) : null}
+
+              {!isPrebook && !isCatalog && !isSales && !isTrafficIntelligence && !isInstantAdmin ? (
+                <div className="card glass" style={{ marginBottom: 12, width: "100%" }}>
+                  <div className="cardTitleRow">
+                    <div className="cardTitle">Generated Reports (Instant)</div>
+                    <div className="mutedSmall">{activeHistory.length} items</div>
+                  </div>
+
+                  <div className="historyTools">
+                    <input
+                      className="input inputSm"
+                      value={historyQuery}
+                      onChange={(e) => setHistoryQuery(e.target.value)}
+                      placeholder="Search title / topic / instantId…"
+                    />
+                    <select className="select" value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
+                      <option value="all">All</option>
+                      <option value="queued">queued</option>
+                      <option value="running">running</option>
+                      <option value="done">done</option>
+                      <option value="failed">failed</option>
+                      <option value="unknown">unknown</option>
+                    </select>
+                  </div>
+
+                  {!filteredHistory.length ? (
+                    <div className="empty fancyEmpty">
+                      <div className="emptyIcon">📄</div>
+                      <div className="emptyTitle">No matching reports</div>
+                      <div className="mutedSmall">Generate a report, or clear the search/filter.</div>
+                    </div>
+                  ) : (
+                    <HistoryTable
+                      activeTab={activeTab}
+                      filteredHistory={filteredHistory}
+                      copyToClipboard={copyToClipboard}
+                      removeItem={removeItem}
+                      setLeft={setLeft}
+                      setRight={setRight}
+                    />
+                  )}
+                </div>
+              ) : null}
 
             {!isCatalog && !isSales && !isTrafficIntelligence && !isInstantAdmin ? (
               <>
@@ -5179,19 +5182,19 @@ function AdsIntelligencePanel({
                         <div>{item.searchTerm}</div>
                         <div className="mutedSmall">{item.adGroup}</div>
                       </td>
-                      <td>
+                      <td style={{ textAlign: "center" }}>
                         <div>{websiteLabel}</div>
                         {item.matchedReportSlug ? <div className="mutedSmall">Matched: {item.matchedReportSlug}</div> : null}
                       </td>
-                      <td>{item.device}</td>
-                      <td className="mono">{formatNumberCompact(item.clicks)}</td>
-                      <td className="mono">{formatInr(item.cost)}</td>
-                      <td className="mono">{formatNumberCompact(item.leads)}</td>
-                      <td className="mono">{formatNumberCompact(item.sales)} / {formatInr(item.revenue)}</td>
-                      <td>
+                      <td style={{ textAlign: "center" }}>{item.device}</td>
+                      <td className="mono" style={{ textAlign: "center" }}>{formatNumberCompact(item.clicks)}</td>
+                      <td className="mono" style={{ textAlign: "center" }}>{formatInr(item.cost)}</td>
+                      <td className="mono" style={{ textAlign: "center" }}>{formatNumberCompact(item.leads)}</td>
+                      <td className="mono" style={{ textAlign: "center" }}>{formatNumberCompact(item.sales)} / {formatInr(item.revenue)}</td>
+                      <td style={{ textAlign: "center" }}>
                         <span className={clsx("badge", getAdsQualityClass(item.quality))}>{item.quality}</span>
                       </td>
-                      <td>
+                      <td style={{ textAlign: "center" }}>
                         <button className="miniBtn" onClick={() => toggleAdsRow(item.id)} type="button">
                           {rowOpen ? "Hide" : "View"}
                         </button>
