@@ -4949,6 +4949,105 @@ function AdsIntelligencePanel({
     });
   })();
 
+  const [adsSort, setAdsSort] = useState({ key: "date", direction: "desc" });
+
+  const adsColumns = useMemo(
+    () => [
+      { key: "date", label: "Date", width: 108, type: "date" },
+      { key: "keyword", label: "Keyword", width: 160, type: "text" },
+      { key: "searchTerm", label: "Google search term", type: "text" },
+      { key: "website", label: "Website search/context", type: "text" },
+      { key: "device", label: "Device", width: 95, type: "text" },
+      { key: "clicks", label: "Clicks", width: 80, type: "number" },
+      { key: "cost", label: "Cost", width: 95, type: "number" },
+      { key: "leads", label: "Leads", width: 90, type: "number" },
+      { key: "sales", label: "Sales", width: 95, type: "number" },
+      { key: "quality", label: "Quality", width: 125, type: "text" },
+    ],
+    []
+  );
+
+  function getAdsWebsiteLabel(item = {}) {
+    return item.websiteSearchTerms?.length
+      ? item.websiteSearchTerms.slice(0, 2).join(" • ")
+      : item.websiteContext || item.matchedReportSlug || "-";
+  }
+
+  function getAdsSortValue(item = {}, key) {
+    if (key === "date") {
+      const d = item.date ? new Date(item.date) : null;
+      return d && !Number.isNaN(d.getTime()) ? d.getTime() : 0;
+    }
+    if (key === "website") return getAdsWebsiteLabel(item);
+    if (key === "sales") return Number(item.sales || 0) * 1000000000 + toAmountNumber(item.revenue);
+    if (["clicks", "cost", "leads"].includes(key)) return toAmountNumber(item[key]);
+    return item[key] ?? "";
+  }
+
+  const sortedAdsItems = useMemo(() => {
+    const column = adsColumns.find((c) => c.key === adsSort.key) || adsColumns[0];
+    const direction = adsSort.direction === "asc" ? 1 : -1;
+
+    return [...(adsItems || [])].sort((a, b) => {
+      const av = getAdsSortValue(a, column.key);
+      const bv = getAdsSortValue(b, column.key);
+
+      if (column.type === "number" || column.type === "date") {
+        const an = Number(av) || 0;
+        const bn = Number(bv) || 0;
+        if (an !== bn) return (an - bn) * direction;
+      } else {
+        const cmp = String(av || "").localeCompare(String(bv || ""), undefined, {
+          numeric: true,
+          sensitivity: "base",
+        });
+        if (cmp !== 0) return cmp * direction;
+      }
+
+      return String(a.id || "").localeCompare(String(b.id || ""));
+    });
+  }, [adsItems, adsSort, adsColumns]);
+
+  function toggleAdsSort(key) {
+    setAdsSort((prev) => ({
+      key,
+      direction: prev.key === key && prev.direction === "asc" ? "desc" : "asc",
+    }));
+  }
+
+  function SortableAdsHeader({ column }) {
+    const active = adsSort.key === column.key;
+    const indicator = active ? (adsSort.direction === "asc" ? "▲" : "▼") : "↕";
+
+    return (
+      <th style={{ width: column.width, textAlign: "center" }}>
+        <button
+          type="button"
+          onClick={() => toggleAdsSort(column.key)}
+          title={`Sort by ${column.label}`}
+          style={{
+            width: "100%",
+            border: 0,
+            background: "transparent",
+            color: "inherit",
+            cursor: "pointer",
+            display: "inline-flex",
+            alignItems: "center",
+            justifyContent: "center",
+            gap: 6,
+            font: "inherit",
+            fontWeight: 700,
+            textAlign: "center",
+            padding: 0,
+          }}
+        >
+          <span>{column.label}</span>
+          <span className="mutedSmall" aria-hidden="true">{indicator}</span>
+        </button>
+      </th>
+    );
+  }
+
   return (
     <div className="card glass" style={{ border: "1px solid rgba(14,165,233,0.28)", background: "rgba(6,18,28,0.46)" }}>
       <div className="cardTitleRow">
@@ -5055,27 +5154,18 @@ function AdsIntelligencePanel({
           <table className="table">
             <thead>
               <tr>
-                <th style={{ width: 108 }}>Date</th>
-                <th style={{ width: 160 }}>Keyword</th>
-                <th>Google search term</th>
-                <th>Website search/context</th>
-                <th style={{ width: 95 }}>Device</th>
-                <th style={{ width: 80 }}>Clicks</th>
-                <th style={{ width: 95 }}>Cost</th>
-                <th style={{ width: 90 }}>Leads</th>
-                <th style={{ width: 95 }}>Sales</th>
-                <th style={{ width: 125 }}>Quality</th>
-                <th style={{ width: 78 }}></th>
+                {adsColumns.map((column) => (
+                  <SortableAdsHeader key={column.key} column={column} />
+                ))}
+                <th style={{ width: 78, textAlign: "center" }}>Details</th>
               </tr>
             </thead>
             <tbody>
-              {adsItems.map((item) => {
+              {sortedAdsItems.map((item) => {
                 const rowOpen = Boolean(expandedAdsRows[item.id]);
                 const dt = item.date ? new Date(item.date) : null;
                 const dateLabel = dt && !Number.isNaN(dt.getTime()) ? dt.toLocaleDateString("en-IN", { day: "2-digit", month: "short" }) : item.dateKey || "-";
-                const websiteLabel = item.websiteSearchTerms?.length
-                  ? item.websiteSearchTerms.slice(0, 2).join(" • ")
-                  : item.websiteContext || item.matchedReportSlug || "-";
+                const websiteLabel = getAdsWebsiteLabel(item);
 
                 return (
                   <React.Fragment key={item.id}>
