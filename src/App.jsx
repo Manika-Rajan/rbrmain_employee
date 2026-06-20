@@ -756,6 +756,64 @@ function normalizeAdsIntelligencePayload(payload) {
   });
 }
 
+
+function normalizeWebsiteSearchPayload(payload, key = "website_searches") {
+  const parsed = payload && typeof payload.body === "string" ? JSON.parse(payload.body) : payload;
+  const rawItems = Array.isArray(parsed?.[key])
+    ? parsed[key]
+    : key === "website_searches" && Array.isArray(parsed?.websiteSearches)
+    ? parsed.websiteSearches
+    : key === "matched_website_searches" && Array.isArray(parsed?.matchedWebsiteSearches)
+    ? parsed.matchedWebsiteSearches
+    : key === "unmatched_website_searches" && Array.isArray(parsed?.unmatchedWebsiteSearches)
+    ? parsed.unmatchedWebsiteSearches
+    : [];
+
+  return rawItems.map((item, index) => {
+    const dateValue = pickLoose(item.date, item.date_key, item.dateKey, item.day, "");
+    const timestamp = pickLoose(item.timestamp, item.time, item.createdAt, item.created_at, "");
+    const query = pickLoose(item.query, item.websiteSearch, item.website_search, item.search, item.term, "-");
+    const matchedGoogleTerms = Array.isArray(item.matched_google_search_terms)
+      ? item.matched_google_search_terms
+      : Array.isArray(item.matchedGoogleSearchTerms)
+      ? item.matchedGoogleSearchTerms
+      : toStringList(item.matched_google_search_terms || item.matchedGoogleSearchTerms || "");
+    const matchedTrafficIds = Array.isArray(item.matched_traffic_ids)
+      ? item.matched_traffic_ids
+      : Array.isArray(item.matchedTrafficIds)
+      ? item.matchedTrafficIds
+      : toStringList(item.matched_traffic_ids || item.matchedTrafficIds || "");
+    const matchedGoogleAds = Boolean(
+      item.matched_google_ads === true ||
+        item.matchedGoogleAds === true ||
+        String(item.matched_google_ads || item.matchedGoogleAds || "").toLowerCase() === "true"
+    );
+
+    return {
+      id: pickLoose(item.website_search_id, item.websiteSearchId, item.id, `${dateValue || "website"}-${timestamp || index}-${index}`),
+      date: dateValue,
+      dateKey: getDateKey(dateValue || timestamp),
+      timestamp,
+      query,
+      username: pickLoose(item.username, item.name, item.user, ""),
+      phone: pickLoose(item.phone, item.mobile, item.user_phone, item.userPhone, ""),
+      email: pickLoose(item.email, ""),
+      ip: pickLoose(item.ip, item.ip_address, item.ipAddress, ""),
+      city: pickLoose(item.city, ""),
+      state: pickLoose(item.state, ""),
+      country: pickLoose(item.country, ""),
+      pincode: pickLoose(item.pincode, item.pin_code, item.postal_code, ""),
+      matchedGoogleAds,
+      bestMatchScore: Number(pickLoose(item.best_match_score, item.bestMatchScore, 0)) || 0,
+      bestMatchConfidence: pickLoose(item.best_match_confidence, item.bestMatchConfidence, matchedGoogleAds ? "matched" : "unmatched"),
+      matchedGoogleSearchTerms: matchedGoogleTerms,
+      matchedTrafficIds,
+      source: pickLoose(item.source, "website_search_log"),
+      raw: item,
+    };
+  });
+}
+
 function getAdsQualityClass(value) {
   const q = normalize(value).replace(/\s+/g, "-");
   return q ? `st-${q}` : "st-unknown";
@@ -930,6 +988,11 @@ export default function App() {
   const [expandedSaleDates, setExpandedSaleDates] = useState({});
   const [salesMeta, setSalesMeta] = useState({ total: 0, source: "" });
   const [adsItems, setAdsItems] = useState([]);
+  const [websiteSearchItems, setWebsiteSearchItems] = useState([]);
+  const [matchedWebsiteSearchItems, setMatchedWebsiteSearchItems] = useState([]);
+  const [unmatchedWebsiteSearchItems, setUnmatchedWebsiteSearchItems] = useState([]);
+  const [adsTableOpen, setAdsTableOpen] = useState(true);
+  const [websiteTableOpen, setWebsiteTableOpen] = useState(false);
   const [adsLoading, setAdsLoading] = useState(false);
   const [adsUpdating, setAdsUpdating] = useState(false);
   const [adsError, setAdsError] = useState("");
@@ -1148,6 +1211,47 @@ export default function App() {
       return matchesSearch && matchesQuality && matchesDevice;
     });
   }, [adsItems, adsSearch, adsQualityFilter, adsDeviceFilter]);
+
+  const filteredWebsiteSearchItems = useMemo(() => {
+    const q = normalize(adsSearch);
+    if (!q) return websiteSearchItems;
+    return websiteSearchItems.filter((item) =>
+      [
+        item.query,
+        item.timestamp,
+        item.date,
+        item.city,
+        item.state,
+        item.country,
+        item.pincode,
+        item.ip,
+        item.phone,
+        item.email,
+        item.bestMatchConfidence,
+        ...(item.matchedGoogleSearchTerms || []),
+      ]
+        .map(normalize)
+        .some((value) => value.includes(q))
+    );
+  }, [websiteSearchItems, adsSearch]);
+
+  const filteredMatchedWebsiteSearchItems = useMemo(() => {
+    const ids = new Set(filteredWebsiteSearchItems.map((item) => item.id));
+    return matchedWebsiteSearchItems.filter((item) => ids.has(item.id));
+  }, [matchedWebsiteSearchItems, filteredWebsiteSearchItems]);
+
+  const filteredUnmatchedWebsiteSearchItems = useMemo(() => {
+    const ids = new Set(filteredWebsiteSearchItems.map((item) => item.id));
+    return unmatchedWebsiteSearchItems.filter((item) => ids.has(item.id));
+  }, [unmatchedWebsiteSearchItems, filteredWebsiteSearchItems]);
+
+  const websiteSearchSummary = useMemo(() => {
+    return {
+      total: filteredWebsiteSearchItems.length,
+      matched: filteredMatchedWebsiteSearchItems.length,
+      unmatched: filteredUnmatchedWebsiteSearchItems.length,
+    };
+  }, [filteredWebsiteSearchItems, filteredMatchedWebsiteSearchItems, filteredUnmatchedWebsiteSearchItems]);
 
   const adsSummary = useMemo(() => {
     return filteredAdsItems.reduce(
@@ -2404,6 +2508,9 @@ export default function App() {
 
     if (!TRAFFIC_INTELLIGENCE_API) {
       setAdsItems([]);
+      setWebsiteSearchItems([]);
+      setMatchedWebsiteSearchItems([]);
+      setUnmatchedWebsiteSearchItems([]);
       setAdsMeta({ total: 0, source: "", lastPulledAt: "" });
       setAdsLoading(false);
       setAdsError("Missing env var: VITE_TRAFFIC_INTELLIGENCE_API. Add your traffic-intelligence list Lambda/API Gateway URL in Amplify env vars and redeploy.");
@@ -2421,7 +2528,13 @@ export default function App() {
       }
 
       const items = normalizeAdsIntelligencePayload(data);
+      const websiteSearches = normalizeWebsiteSearchPayload(data, "website_searches");
+      const matchedWebsiteSearches = normalizeWebsiteSearchPayload(data, "matched_website_searches");
+      const unmatchedWebsiteSearches = normalizeWebsiteSearchPayload(data, "unmatched_website_searches");
       setAdsItems(items);
+      setWebsiteSearchItems(websiteSearches);
+      setMatchedWebsiteSearchItems(matchedWebsiteSearches);
+      setUnmatchedWebsiteSearchItems(unmatchedWebsiteSearches);
       setAdsMeta({
         total: Number(data?.total || data?.count || items.length || 0),
         source: data?.source || "ads_intelligence_api",
@@ -2429,6 +2542,9 @@ export default function App() {
       });
     } catch (e) {
       setAdsItems([]);
+      setWebsiteSearchItems([]);
+      setMatchedWebsiteSearchItems([]);
+      setUnmatchedWebsiteSearchItems([]);
       setAdsMeta({ total: 0, source: "", lastPulledAt: "" });
       setAdsError(e?.message || "Failed to load Traffic Intelligence data");
     } finally {
@@ -2458,8 +2574,14 @@ export default function App() {
       }
 
       const returnedItems = normalizeAdsIntelligencePayload(data);
-      if (returnedItems.length) {
+      const returnedWebsiteSearches = normalizeWebsiteSearchPayload(data, "website_searches");
+      const returnedMatchedWebsiteSearches = normalizeWebsiteSearchPayload(data, "matched_website_searches");
+      const returnedUnmatchedWebsiteSearches = normalizeWebsiteSearchPayload(data, "unmatched_website_searches");
+      if (returnedItems.length || returnedWebsiteSearches.length) {
         setAdsItems(returnedItems);
+        setWebsiteSearchItems(returnedWebsiteSearches);
+        setMatchedWebsiteSearchItems(returnedMatchedWebsiteSearches);
+        setUnmatchedWebsiteSearchItems(returnedUnmatchedWebsiteSearches);
         setAdsMeta({
           total: Number(data?.total || data?.count || returnedItems.length || 0),
           source: data?.source || "google_ads_update_api",
@@ -4091,6 +4213,14 @@ export default function App() {
             {isTrafficIntelligence ? (
               <AdsIntelligencePanel
                 adsItems={filteredAdsItems}
+                websiteSearchItems={filteredWebsiteSearchItems}
+                matchedWebsiteSearchItems={filteredMatchedWebsiteSearchItems}
+                unmatchedWebsiteSearchItems={filteredUnmatchedWebsiteSearchItems}
+                websiteSearchSummary={websiteSearchSummary}
+                adsTableOpen={adsTableOpen}
+                setAdsTableOpen={setAdsTableOpen}
+                websiteTableOpen={websiteTableOpen}
+                setWebsiteTableOpen={setWebsiteTableOpen}
                 adsSummary={adsSummary}
                 adsLoading={adsLoading}
                 adsUpdating={adsUpdating}
@@ -4919,6 +5049,14 @@ function CatalogSuggestionsPanel({
 
 function AdsIntelligencePanel({
   adsItems,
+  websiteSearchItems,
+  matchedWebsiteSearchItems,
+  unmatchedWebsiteSearchItems,
+  websiteSearchSummary,
+  adsTableOpen,
+  setAdsTableOpen,
+  websiteTableOpen,
+  setWebsiteTableOpen,
   adsSummary,
   adsLoading,
   adsUpdating,
@@ -5051,6 +5189,59 @@ function AdsIntelligencePanel({
     );
   }
 
+  const sortedWebsiteSearchItems = useMemo(() => {
+    return [...(websiteSearchItems || [])].sort((a, b) => {
+      const ad = `${a.date || ""} ${a.timestamp || ""}`;
+      const bd = `${b.date || ""} ${b.timestamp || ""}`;
+      return bd.localeCompare(ad, undefined, { numeric: true });
+    });
+  }, [websiteSearchItems]);
+
+  function getWebsiteTimeLabel(item = {}) {
+    if (!item.timestamp) return "-";
+    const timeMatch = String(item.timestamp).match(/(\d{1,2}:\d{2}(?::\d{2})?)/);
+    if (timeMatch) return timeMatch[1];
+    const d = new Date(item.timestamp);
+    if (!Number.isNaN(d.getTime())) {
+      return d.toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false });
+    }
+    return item.timestamp;
+  }
+
+  function getWebsiteDateLabel(item = {}) {
+    const raw = item.date || item.dateKey || item.timestamp || "";
+    if (!raw) return "-";
+    const d = new Date(String(raw).length === 10 ? `${raw}T00:00:00` : raw);
+    if (Number.isNaN(d.getTime())) return raw;
+    return d.toLocaleDateString("en-IN", { day: "2-digit", month: "short" });
+  }
+
+  function CollapsibleTableHeader({ title, subtitle, count, open, onToggle, accent = "rgba(14,165,233,0.20)" }) {
+    return (
+      <div
+        className="card"
+        style={{
+          marginTop: 14,
+          background: "rgba(255,255,255,0.035)",
+          border: `1px solid ${accent}`,
+        }}
+      >
+        <div className="cardTitleRow">
+          <div>
+            <div className="cardTitle">{title}</div>
+            <div className="mutedSmall">{subtitle}</div>
+          </div>
+          <div className="rowActions">
+            <span className="chipDisabled">{formatNumberCompact(count)} rows</span>
+            <button className="btnSecondary" type="button" onClick={onToggle}>
+              {open ? "Minimize table" : "Expand table"}
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="card glass" style={{ border: "1px solid rgba(14,165,233,0.28)", background: "rgba(6,18,28,0.46)" }}>
       <div className="cardTitleRow">
@@ -5077,16 +5268,18 @@ function AdsIntelligencePanel({
       <div
         style={{
           display: "grid",
-          gridTemplateColumns: "repeat(6, minmax(130px, 1fr))",
+          gridTemplateColumns: "repeat(8, minmax(130px, 1fr))",
           gap: 12,
           marginTop: 14,
         }}
       >
         {[
-          ["Rows shown", adsItems.length],
+          ["Google Ads rows", adsItems.length],
           ["Clicks", formatNumberCompact(adsSummary.clicks)],
           ["Cost", formatInr(adsSummary.cost)],
-          ["Website searches", formatNumberCompact(adsSummary.websiteSearches)],
+          ["Matched website context", formatNumberCompact(adsSummary.websiteSearches)],
+          ["Website searches found", formatNumberCompact(websiteSearchSummary.total)],
+          ["Unmatched website searches", formatNumberCompact(websiteSearchSummary.unmatched)],
           ["Leads", formatNumberCompact(adsSummary.leads)],
           ["Sales / Revenue", `${formatNumberCompact(adsSummary.sales)} • ${formatInr(adsSummary.revenue)}`],
         ].map(([label, value]) => (
@@ -5115,7 +5308,7 @@ function AdsIntelligencePanel({
           className="input inputSm"
           value={adsSearch}
           onChange={(e) => setAdsSearch(e.target.value)}
-          placeholder="Search keyword / search term / website context / campaign…"
+          placeholder="Search keyword / Google term / website search / city / IP / campaign…"
         />
         <select className="input inputSm" value={adsQualityFilter} onChange={(e) => setAdsQualityFilter(e.target.value)}>
           {adsQualityOptions.map((q) => (
@@ -5152,8 +5345,16 @@ function AdsIntelligencePanel({
         </div>
       ) : null}
 
-      {adsItems.length ? (
-        <div className="tableWrap" style={{ marginTop: 14 }}>
+      <CollapsibleTableHeader
+        title="Google Ads Traffic Rows"
+        subtitle="Google Ads search terms enriched with matched website searches when available."
+        count={adsItems.length}
+        open={adsTableOpen}
+        onToggle={() => setAdsTableOpen(!adsTableOpen)}
+      />
+
+      {adsItems.length && adsTableOpen ? (
+        <div className="tableWrap" style={{ marginTop: 10 }}>
           <table className="table">
             <thead>
               <tr>
@@ -5233,6 +5434,77 @@ function AdsIntelligencePanel({
               })}
             </tbody>
           </table>
+        </div>
+      ) : null}
+
+      <CollapsibleTableHeader
+        title="Website Searches Found"
+        subtitle="First-party searches from S3 logs. These are shown even when not matched to Google Ads."
+        count={websiteSearchItems.length}
+        open={websiteTableOpen}
+        onToggle={() => setWebsiteTableOpen(!websiteTableOpen)}
+        accent="rgba(34,197,94,0.25)"
+      />
+
+      {websiteSearchItems.length && websiteTableOpen ? (
+        <div className="tableWrap" style={{ marginTop: 10 }}>
+          <table className="table">
+            <thead>
+              <tr>
+                <th style={{ width: 96, textAlign: "center" }}>Date</th>
+                <th style={{ width: 110, textAlign: "center" }}>Time</th>
+                <th>Website search</th>
+                <th style={{ width: 135, textAlign: "center" }}>City</th>
+                <th style={{ width: 135, textAlign: "center" }}>State</th>
+                <th style={{ width: 135, textAlign: "center" }}>IP</th>
+                <th style={{ width: 140, textAlign: "center" }}>Match status</th>
+                <th>Matched Google search</th>
+                <th style={{ width: 86, textAlign: "center" }}>Copy</th>
+              </tr>
+            </thead>
+            <tbody>
+              {sortedWebsiteSearchItems.map((item) => {
+                const matchedTerms = item.matchedGoogleSearchTerms || [];
+                return (
+                  <tr className="row" key={item.id}>
+                    <td className="mono" style={{ textAlign: "center" }}>{getWebsiteDateLabel(item)}</td>
+                    <td className="mono" style={{ textAlign: "center" }}>{getWebsiteTimeLabel(item)}</td>
+                    <td>
+                      <div className="titleCell">{item.query || "-"}</div>
+                      {(item.phone || item.email || item.pincode) ? (
+                        <div className="mutedSmall">
+                          {[item.phone, item.email, item.pincode].filter(Boolean).join(" • ")}
+                        </div>
+                      ) : null}
+                    </td>
+                    <td style={{ textAlign: "center" }}>{item.city || "-"}</td>
+                    <td style={{ textAlign: "center" }}>{item.state || "-"}</td>
+                    <td className="mono" style={{ textAlign: "center" }}>{item.ip || "-"}</td>
+                    <td style={{ textAlign: "center" }}>
+                      <span className={clsx("badge", item.matchedGoogleAds ? "st-warm" : "st-needs-review")}>
+                        {item.matchedGoogleAds ? `Matched ${item.bestMatchConfidence || ""}` : "Unmatched"}
+                      </span>
+                      {item.bestMatchScore ? <div className="mutedSmall">Score {item.bestMatchScore}</div> : null}
+                    </td>
+                    <td>
+                      {matchedTerms.length ? matchedTerms.slice(0, 3).join(" • ") : "-"}
+                    </td>
+                    <td style={{ textAlign: "center" }}>
+                      <button className="miniBtn" type="button" onClick={() => copyToClipboard(item.query || "")}>Copy</button>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      ) : null}
+
+      {!websiteSearchItems.length && !adsLoading ? (
+        <div className="empty fancyEmpty" style={{ marginTop: 12 }}>
+          <div className="emptyIcon">🔎</div>
+          <div className="emptyTitle">No website searches found in the loaded date range</div>
+          <div className="mutedSmall">The API is ready, but the current response did not include website_searches.</div>
         </div>
       ) : null}
     </div>
