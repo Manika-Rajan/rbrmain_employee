@@ -2555,33 +2555,64 @@ export default function App() {
   async function updateGoogleAdsDetails() {
     setAdsUpdating(true);
     setAdsError("");
-
+  
     if (!GOOGLE_ADS_UPDATE_API) {
       setAdsUpdating(false);
-      setAdsError("Missing env var: VITE_GOOGLE_ADS_UPDATE_API. Add your manual Google Ads pull Lambda/API Gateway URL in Amplify env vars and redeploy.");
+      setAdsError(
+        "Missing env var: VITE_GOOGLE_ADS_UPDATE_API. Add your manual Google Ads pull Lambda/API Gateway URL in Amplify env vars and redeploy."
+      );
       return;
     }
-
+  
     try {
-      const { res, data } = await fetchJson(GOOGLE_ADS_UPDATE_API, {
+      const payload = {
+        requestedAt: nowIso(),
+        source: "employee_traffic_intelligence_tab",
+      };
+  
+      console.log("GOOGLE ADS UPDATE URL =", GOOGLE_ADS_UPDATE_API);
+      console.log("GOOGLE ADS UPDATE PAYLOAD =", payload);
+  
+      const res = await fetch(GOOGLE_ADS_UPDATE_API, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ requestedAt: nowIso(), source: "employee_ads_intelligence_tab" }),
+        body: JSON.stringify(payload),
       });
-
-      if (!res.ok || data?.ok === false) {
-        throw new Error(buildErrorMessage(res, data, "Google Ads update failed"));
+  
+      const text = await res.text();
+  
+      let data = {};
+      try {
+        data = text ? JSON.parse(text) : {};
+      } catch {
+        data = { raw: text };
       }
-
+  
+      console.log("GOOGLE ADS UPDATE STATUS =", res.status);
+      console.log("GOOGLE ADS UPDATE RESPONSE TEXT =", text);
+      console.log("GOOGLE ADS UPDATE RESPONSE DATA =", data);
+  
+      if (!res.ok || data?.ok === false) {
+        throw new Error(
+          data?.error ||
+            data?.message ||
+            data?.details ||
+            data?.raw ||
+            `Google Ads update failed. HTTP ${res.status}`
+        );
+      }
+  
       const returnedItems = normalizeAdsIntelligencePayload(data);
       const returnedWebsiteSearches = normalizeWebsiteSearchPayload(data, "website_searches");
       const returnedMatchedWebsiteSearches = normalizeWebsiteSearchPayload(data, "matched_website_searches");
       const returnedUnmatchedWebsiteSearches = normalizeWebsiteSearchPayload(data, "unmatched_website_searches");
+  
       if (returnedItems.length || returnedWebsiteSearches.length) {
         setAdsItems(returnedItems);
         setWebsiteSearchItems(returnedWebsiteSearches);
         setMatchedWebsiteSearchItems(returnedMatchedWebsiteSearches);
         setUnmatchedWebsiteSearchItems(returnedUnmatchedWebsiteSearches);
+  
         setAdsMeta({
           total: Number(data?.total || data?.count || returnedItems.length || 0),
           source: data?.source || "google_ads_update_api",
@@ -2590,9 +2621,10 @@ export default function App() {
       } else {
         await loadAdsIntelligence();
       }
-
+  
       setToast("Google Ads details updated ✅");
     } catch (e) {
+      console.error("GOOGLE ADS UPDATE ERROR =", e);
       setAdsError(e?.message || "Google Ads update failed");
       setToast("Google Ads update failed");
     } finally {
