@@ -4889,7 +4889,7 @@ export default function App() {
                 </div>
               ) : null}
 
-            {!isCatalog && !isSales && !isTrafficIntelligence && !isInstantAdmin ? (
+            {!isCatalog && !isSales && !isTrafficIntelligence && !isWebsiteSearches && !isInstantAdmin ? (
               <>
                 <div className="compareHeader">
                   <div className="compareTitleRow">
