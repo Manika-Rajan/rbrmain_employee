@@ -814,6 +814,309 @@ function normalizeWebsiteSearchPayload(payload, key = "website_searches") {
   });
 }
 
+
+function unwrapApiPayload(payload) {
+  if (payload && typeof payload.body === "string") {
+    try {
+      return JSON.parse(payload.body);
+    } catch {
+      return payload;
+    }
+  }
+  return payload || {};
+}
+
+function firstNonEmptyFromObject(obj = {}, keys = []) {
+  const lowerMap = new Map(
+    Object.keys(obj || {}).map((key) => [String(key).trim().toLowerCase(), key])
+  );
+
+  for (const key of keys) {
+    const exact = obj?.[key];
+    if (exact !== undefined && exact !== null && exact !== "") return exact;
+
+    const foundKey = lowerMap.get(String(key).trim().toLowerCase());
+    if (foundKey) {
+      const value = obj?.[foundKey];
+      if (value !== undefined && value !== null && value !== "") return value;
+    }
+  }
+
+  return "";
+}
+
+function getSearchExplorerTimestamp(item = {}) {
+  const raw = item.raw || item;
+  return pickLoose(
+    item.timestamp,
+    firstNonEmptyFromObject(raw, [
+      "timestamp",
+      "time",
+      "createdAt",
+      "created_at",
+      "search_time",
+      "searchTime",
+      "searched_at",
+      "searchedAt",
+      "date_time",
+      "dateTime",
+      "datetime",
+    ]),
+    ""
+  );
+}
+
+function normalizeSearchExplorerPayload(payload) {
+  const parsed = unwrapApiPayload(payload);
+  const rawItems = Array.isArray(parsed)
+    ? parsed
+    : Array.isArray(parsed?.items)
+    ? parsed.items
+    : Array.isArray(parsed?.rows)
+    ? parsed.rows
+    : Array.isArray(parsed?.searches)
+    ? parsed.searches
+    : Array.isArray(parsed?.website_searches)
+    ? parsed.website_searches
+    : Array.isArray(parsed?.websiteSearches)
+    ? parsed.websiteSearches
+    : Array.isArray(parsed?.data)
+    ? parsed.data
+    : [];
+
+  const rawColumns = Array.isArray(parsed?.columns)
+    ? parsed.columns.map((x) => String(x || "").trim()).filter(Boolean)
+    : [];
+
+  const discoveredColumns = [];
+  rawItems.forEach((row) => {
+    Object.keys(row || {}).forEach((key) => {
+      if (!discoveredColumns.includes(key)) discoveredColumns.push(key);
+    });
+  });
+
+  const columns = Array.from(new Set([...rawColumns, ...discoveredColumns])).filter(Boolean);
+
+  const items = rawItems.map((item, index) => {
+    const timestamp = pickLoose(
+      firstNonEmptyFromObject(item, [
+        "timestamp",
+        "time",
+        "createdAt",
+        "created_at",
+        "search_time",
+        "searchTime",
+        "searched_at",
+        "searchedAt",
+        "date_time",
+        "dateTime",
+        "datetime",
+      ]),
+      ""
+    );
+
+    const dateValue = pickLoose(
+      firstNonEmptyFromObject(item, ["date", "date_key", "dateKey", "day", "search_date", "searchDate"]),
+      timestamp,
+      ""
+    );
+
+    const query = pickLoose(
+      firstNonEmptyFromObject(item, [
+        "query",
+        "websiteSearch",
+        "website_search",
+        "search",
+        "search_term",
+        "searchTerm",
+        "term",
+        "keyword",
+        "user_query",
+        "userQuery",
+      ]),
+      "-"
+    );
+
+    const city = pickLoose(firstNonEmptyFromObject(item, ["city", "City", "location_city"]), "");
+    const state = pickLoose(firstNonEmptyFromObject(item, ["state", "State", "region", "province"]), "");
+    const country = pickLoose(firstNonEmptyFromObject(item, ["country", "Country", "country_name"]), "");
+    const ip = pickLoose(firstNonEmptyFromObject(item, ["ip", "ip_address", "ipAddress", "client_ip", "clientIp"]), "");
+    const pincode = pickLoose(firstNonEmptyFromObject(item, ["pincode", "pin_code", "postal_code", "postalCode", "zip"]), "");
+    const phone = pickLoose(firstNonEmptyFromObject(item, ["phone", "mobile", "user_phone", "userPhone", "mobile_number"]), "");
+    const email = pickLoose(firstNonEmptyFromObject(item, ["email", "user_email", "userEmail"]), "");
+    const device = pickLoose(firstNonEmptyFromObject(item, ["device", "device_type", "deviceType", "platform"]), "");
+    const source = pickLoose(firstNonEmptyFromObject(item, ["source", "traffic_source", "trafficSource", "utm_source"]), "website_search_log");
+
+    return {
+      id: pickLoose(
+        firstNonEmptyFromObject(item, ["website_search_id", "websiteSearchId", "id", "row_id", "rowId"]),
+        `${dateValue || "search"}-${timestamp || index}-${index}`
+      ),
+      date: dateValue,
+      dateKey: getDateKey(dateValue || timestamp),
+      timestamp,
+      query,
+      ip,
+      city,
+      state,
+      country,
+      pincode,
+      phone,
+      email,
+      device,
+      source,
+      raw: item,
+    };
+  });
+
+  return {
+    items,
+    columns,
+    total: Number(parsed?.total || parsed?.count || items.length || 0),
+    source: parsed?.source || parsed?.bucket || "website_searches_api",
+    lastUpdatedAt: parsed?.lastUpdatedAt || parsed?.last_updated_at || parsed?.generatedAt || parsed?.generated_at || "",
+    dateRange: parsed?.dateRange || parsed?.date_range || null,
+  };
+}
+
+function getRawColumnValue(raw = {}, columnName = "") {
+  if (!columnName) return "";
+  if (raw?.[columnName] !== undefined && raw?.[columnName] !== null) return raw[columnName];
+  const wanted = String(columnName).trim().toLowerCase();
+  const foundKey = Object.keys(raw || {}).find((key) => String(key).trim().toLowerCase() === wanted);
+  return foundKey ? raw[foundKey] : "";
+}
+
+function getSearchExplorerLocation(item = {}) {
+  return [item.city, item.state, item.country].filter(Boolean).join(", ") || "Unknown location";
+}
+
+function buildSearchExplorerGroupOptions(columns = []) {
+  const base = [
+    { value: "__none", label: "No grouping" },
+    { value: "date", label: "Date" },
+    { value: "query", label: "Website search" },
+    { value: "ip", label: "IP address" },
+    { value: "location", label: "Location" },
+    { value: "city", label: "City" },
+    { value: "state", label: "State" },
+    { value: "country", label: "Country" },
+    { value: "pincode", label: "Pincode" },
+    { value: "phone", label: "Phone" },
+    { value: "email", label: "Email" },
+    { value: "device", label: "Device" },
+    { value: "source", label: "Source" },
+  ];
+
+  const usedLabels = new Set(base.map((x) => x.label.trim().toLowerCase()));
+  const rawOptions = (columns || [])
+    .filter(Boolean)
+    .filter((column) => !usedLabels.has(String(column).trim().toLowerCase()))
+    .map((column) => ({ value: `raw:${column}`, label: `Excel column: ${column}` }));
+
+  return [...base, ...rawOptions];
+}
+
+function getSearchExplorerGroupValue(item = {}, groupBy = "ip") {
+  if (groupBy === "__none") return "All searches";
+  if (groupBy === "date") return item.dateKey && item.dateKey !== "unknown-date" ? formatDateGroupLabel(item.dateKey) : "Unknown date";
+  if (groupBy === "location") return getSearchExplorerLocation(item);
+  if (groupBy?.startsWith("raw:")) {
+    const rawHeader = groupBy.slice(4);
+    return String(getRawColumnValue(item.raw, rawHeader) || "Blank").trim() || "Blank";
+  }
+  return String(item?.[groupBy] || "Blank").trim() || "Blank";
+}
+
+function getSearchExplorerSortTime(item = {}) {
+  const timestamp = getSearchExplorerTimestamp(item);
+  const d = timestamp ? new Date(timestamp) : item.date ? new Date(String(item.date).length === 10 ? `${item.date}T00:00:00` : item.date) : null;
+  return d && !Number.isNaN(d.getTime()) ? d.getTime() : 0;
+}
+
+function groupSearchExplorerItems(items = [], groupBy = "ip") {
+  const map = new Map();
+  const sorted = [...items].sort((a, b) => getSearchExplorerSortTime(b) - getSearchExplorerSortTime(a));
+
+  sorted.forEach((item) => {
+    const label = getSearchExplorerGroupValue(item, groupBy);
+    const key = `${groupBy}:${label}`;
+    if (!map.has(key)) {
+      map.set(key, {
+        key,
+        label,
+        items: [],
+        uniqueQueries: new Set(),
+        uniqueIps: new Set(),
+        latestTime: 0,
+      });
+    }
+
+    const group = map.get(key);
+    group.items.push(item);
+    if (item.query) group.uniqueQueries.add(normalize(item.query));
+    if (item.ip) group.uniqueIps.add(item.ip);
+    group.latestTime = Math.max(group.latestTime, getSearchExplorerSortTime(item));
+  });
+
+  return Array.from(map.values())
+    .map((group) => ({
+      ...group,
+      uniqueQueryCount: group.uniqueQueries.size,
+      uniqueIpCount: group.uniqueIps.size,
+    }))
+    .sort((a, b) => b.items.length - a.items.length || b.latestTime - a.latestTime || a.label.localeCompare(b.label));
+}
+
+function searchExplorerMatches(item = {}, query = "") {
+  const q = normalize(query);
+  if (!q) return true;
+
+  const values = [
+    item.date,
+    item.timestamp,
+    item.query,
+    item.ip,
+    item.city,
+    item.state,
+    item.country,
+    item.pincode,
+    item.phone,
+    item.email,
+    item.device,
+    item.source,
+    ...Object.values(item.raw || {}),
+  ];
+
+  return values.map(normalize).some((value) => value.includes(q));
+}
+
+function summarizeSearchExplorerItems(items = []) {
+  const ips = new Set();
+  const locations = new Set();
+  const queries = new Set();
+  const phones = new Set();
+  const emails = new Set();
+
+  items.forEach((item) => {
+    if (item.ip) ips.add(item.ip);
+    const location = getSearchExplorerLocation(item);
+    if (location && location !== "Unknown location") locations.add(location);
+    if (item.query && item.query !== "-") queries.add(normalize(item.query));
+    if (item.phone) phones.add(item.phone);
+    if (item.email) emails.add(normalize(item.email));
+  });
+
+  return {
+    total: items.length,
+    uniqueIps: ips.size,
+    uniqueLocations: locations.size,
+    uniqueQueries: queries.size,
+    knownPhones: phones.size,
+    knownEmails: emails.size,
+  };
+}
+
 function getAdsQualityClass(value) {
   const q = normalize(value).replace(/\s+/g, "-");
   return q ? `st-${q}` : "st-unknown";
@@ -873,6 +1176,7 @@ export default function App() {
   const SALES_API = import.meta.env.VITE_SALES_API || "";
   const TRAFFIC_INTELLIGENCE_API = import.meta.env.VITE_TRAFFIC_INTELLIGENCE_API || "";
   const GOOGLE_ADS_UPDATE_API = import.meta.env.VITE_GOOGLE_ADS_UPDATE_API || "";
+  const WEBSITE_SEARCHES_API = import.meta.env.VITE_WEBSITE_SEARCHES_API || TRAFFIC_INTELLIGENCE_API || "";
   const SUGGEST_API = "https://vtwyu7hv50.execute-api.ap-south-1.amazonaws.com/default/suggest";
   const SUGGEST_PREVIEW_API = "https://vtwyu7hv50.execute-api.ap-south-1.amazonaws.com/default/RBR_report_pre-signed_URL";
 
@@ -891,6 +1195,7 @@ export default function App() {
   const isCatalog = activeTab === "catalog";
   const isSales = activeTab === "sales";
   const isTrafficIntelligence = activeTab === "traffic-intelligence";
+  const isWebsiteSearches = activeTab === "website-searches";
   const isInstantAdmin = activeTab === "instant" && instantAdminTab !== "generate";
 
   const theme = useMemo(() => {
@@ -1001,6 +1306,15 @@ export default function App() {
   const [adsDeviceFilter, setAdsDeviceFilter] = useState("all");
   const [expandedAdsRows, setExpandedAdsRows] = useState({});
   const [adsMeta, setAdsMeta] = useState({ total: 0, source: "", lastPulledAt: "" });
+  const [searchExplorerItems, setSearchExplorerItems] = useState([]);
+  const [searchExplorerColumns, setSearchExplorerColumns] = useState([]);
+  const [searchExplorerLoading, setSearchExplorerLoading] = useState(false);
+  const [searchExplorerError, setSearchExplorerError] = useState("");
+  const [searchExplorerSearch, setSearchExplorerSearch] = useState("");
+  const [searchExplorerGroupBy, setSearchExplorerGroupBy] = useState("ip");
+  const [expandedSearchExplorerGroups, setExpandedSearchExplorerGroups] = useState({});
+  const [expandedSearchExplorerRows, setExpandedSearchExplorerRows] = useState({});
+  const [searchExplorerMeta, setSearchExplorerMeta] = useState({ total: 0, source: "", lastUpdatedAt: "", dateRange: null });
   const [suggestTesterQuery, setSuggestTesterQuery] = useState("");
   const [suggestLoading, setSuggestLoading] = useState(false);
   const [suggestError, setSuggestError] = useState("");
@@ -1121,6 +1435,11 @@ export default function App() {
   useEffect(() => {
     if (activeTab !== "traffic-intelligence") return;
     loadAdsIntelligence();
+  }, [activeTab]);
+
+  useEffect(() => {
+    if (activeTab !== "website-searches") return;
+    loadWebsiteSearches();
   }, [activeTab]);
 
   const activeHistory = activeTab === "instant" ? history : activeTab === "prebook" ? prebookHistory : [];
@@ -1268,6 +1587,22 @@ export default function App() {
       { clicks: 0, impressions: 0, cost: 0, leads: 0, sales: 0, revenue: 0, websiteSearches: 0 }
     );
   }, [filteredAdsItems]);
+
+  const filteredSearchExplorerItems = useMemo(() => {
+    return searchExplorerItems.filter((item) => searchExplorerMatches(item, searchExplorerSearch));
+  }, [searchExplorerItems, searchExplorerSearch]);
+
+  const searchExplorerGroupOptions = useMemo(() => {
+    return buildSearchExplorerGroupOptions(searchExplorerColumns);
+  }, [searchExplorerColumns]);
+
+  const groupedSearchExplorerItems = useMemo(() => {
+    return groupSearchExplorerItems(filteredSearchExplorerItems, searchExplorerGroupBy);
+  }, [filteredSearchExplorerItems, searchExplorerGroupBy]);
+
+  const searchExplorerSummary = useMemo(() => {
+    return summarizeSearchExplorerItems(filteredSearchExplorerItems);
+  }, [filteredSearchExplorerItems]);
 
   const adsQualityOptions = useMemo(() => {
     return ["all", ...Array.from(new Set(adsItems.map((x) => x.quality).filter(Boolean)))];
@@ -2552,6 +2887,50 @@ export default function App() {
     }
   }
 
+  async function loadWebsiteSearches() {
+    setSearchExplorerLoading(true);
+    setSearchExplorerError("");
+
+    if (!WEBSITE_SEARCHES_API) {
+      setSearchExplorerItems([]);
+      setSearchExplorerColumns([]);
+      setSearchExplorerMeta({ total: 0, source: "", lastUpdatedAt: "", dateRange: null });
+      setSearchExplorerLoading(false);
+      setSearchExplorerError(
+        "Missing env var: VITE_WEBSITE_SEARCHES_API. You can temporarily set it to the existing Traffic Intelligence list API if that response already includes website_searches."
+      );
+      return;
+    }
+
+    try {
+      const { res, data } = await fetchJson(WEBSITE_SEARCHES_API, {
+        method: "GET",
+        headers: { "Content-Type": "application/json" },
+      });
+
+      if (!res.ok || data?.ok === false) {
+        throw new Error(buildErrorMessage(res, data, "Website Searches API failed"));
+      }
+
+      const normalized = normalizeSearchExplorerPayload(data);
+      setSearchExplorerItems(normalized.items);
+      setSearchExplorerColumns(normalized.columns);
+      setSearchExplorerMeta({
+        total: normalized.total,
+        source: normalized.source,
+        lastUpdatedAt: normalized.lastUpdatedAt,
+        dateRange: normalized.dateRange,
+      });
+    } catch (e) {
+      setSearchExplorerItems([]);
+      setSearchExplorerColumns([]);
+      setSearchExplorerMeta({ total: 0, source: "", lastUpdatedAt: "", dateRange: null });
+      setSearchExplorerError(e?.message || "Failed to load website searches");
+    } finally {
+      setSearchExplorerLoading(false);
+    }
+  }
+
   async function updateGoogleAdsDetails() {
     setAdsUpdating(true);
     setAdsError("");
@@ -2634,6 +3013,20 @@ export default function App() {
 
   function toggleAdsRow(rowId) {
     setExpandedAdsRows((prev) => ({
+      ...prev,
+      [rowId]: !prev[rowId],
+    }));
+  }
+
+  function toggleSearchExplorerGroup(groupKey) {
+    setExpandedSearchExplorerGroups((prev) => ({
+      ...prev,
+      [groupKey]: prev[groupKey] !== undefined ? !prev[groupKey] : false,
+    }));
+  }
+
+  function toggleSearchExplorerRow(rowId) {
+    setExpandedSearchExplorerRows((prev) => ({
       ...prev,
       [rowId]: !prev[rowId],
     }));
@@ -3554,6 +3947,25 @@ export default function App() {
               >
                 Traffic Intelligence
               </button>
+              <button
+                type="button"
+                className="chipPill"
+                onClick={() => setActiveTab("website-searches")}
+                style={{
+                  border:
+                    activeTab === "website-searches"
+                      ? "1px solid rgba(34,197,94,0.48)"
+                      : "1px solid rgba(255,255,255,0.14)",
+                  background:
+                    activeTab === "website-searches" ? "rgba(34,197,94,0.16)" : "rgba(255,255,255,0.08)",
+                  color:
+                    activeTab === "website-searches"
+                      ? "rgba(220,252,231,0.98)"
+                      : "rgba(255,255,255,0.88)",
+                }}
+              >
+                Website Searches
+              </button>
             </div>
 
             {activeTab === "instant" ? (
@@ -4178,8 +4590,8 @@ export default function App() {
           </>
         ) : null}
 
-        <div className={clsx("body", (leftHidden || isPrebook || isCatalog || isSales || isTrafficIntelligence || isInstantAdmin) && "bodyFull")}>
-          {!leftHidden && !isPrebook && !isCatalog && !isSales && !isTrafficIntelligence && !isInstantAdmin ? (
+        <div className={clsx("body", (leftHidden || isPrebook || isCatalog || isSales || isTrafficIntelligence || isWebsiteSearches || isInstantAdmin) && "bodyFull")}>
+          {!leftHidden && !isPrebook && !isCatalog && !isSales && !isTrafficIntelligence && !isWebsiteSearches && !isInstantAdmin ? (
             <aside className="left">
               <div className="panelScroll">
                 <div className="card glass">
@@ -4242,7 +4654,28 @@ export default function App() {
           ) : null}
 
           <main className="right">
-            {isTrafficIntelligence ? (
+            {isWebsiteSearches ? (
+              <WebsiteSearchesPanel
+                items={filteredSearchExplorerItems}
+                groupedItems={groupedSearchExplorerItems}
+                columns={searchExplorerColumns}
+                summary={searchExplorerSummary}
+                loading={searchExplorerLoading}
+                error={searchExplorerError}
+                search={searchExplorerSearch}
+                setSearch={setSearchExplorerSearch}
+                groupBy={searchExplorerGroupBy}
+                setGroupBy={setSearchExplorerGroupBy}
+                groupOptions={searchExplorerGroupOptions}
+                expandedGroups={expandedSearchExplorerGroups}
+                expandedRows={expandedSearchExplorerRows}
+                toggleGroup={toggleSearchExplorerGroup}
+                toggleRow={toggleSearchExplorerRow}
+                meta={searchExplorerMeta}
+                loadWebsiteSearches={loadWebsiteSearches}
+                copyToClipboard={copyToClipboard}
+              />
+            ) : isTrafficIntelligence ? (
               <AdsIntelligencePanel
                 adsItems={filteredAdsItems}
                 websiteSearchItems={filteredWebsiteSearchItems}
@@ -4395,7 +4828,7 @@ export default function App() {
               </div>
             ) : null}
 
-              {!isPrebook && !isCatalog && !isSales && !isTrafficIntelligence && !isInstantAdmin ? (
+              {!isPrebook && !isCatalog && !isSales && !isTrafficIntelligence && !isWebsiteSearches && !isInstantAdmin ? (
                 <div className="card glass" style={{ marginBottom: 12, width: "100%" }}>
                   <div className="cardTitleRow">
                     <div className="cardTitle">Generated Reports (Instant)</div>
@@ -5537,6 +5970,324 @@ function AdsIntelligencePanel({
           <div className="emptyIcon">🔎</div>
           <div className="emptyTitle">No website searches found in the loaded date range</div>
           <div className="mutedSmall">The API is ready, but the current response did not include website_searches.</div>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+
+function WebsiteSearchesPanel({
+  items,
+  groupedItems,
+  columns,
+  summary,
+  loading,
+  error,
+  search,
+  setSearch,
+  groupBy,
+  setGroupBy,
+  groupOptions,
+  expandedGroups,
+  expandedRows,
+  toggleGroup,
+  toggleRow,
+  meta,
+  loadWebsiteSearches,
+  copyToClipboard,
+}) {
+  const [visibleRawColumns, setVisibleRawColumns] = useState([]);
+
+  useEffect(() => {
+    setVisibleRawColumns((prev) => {
+      if (prev.length) return prev.filter((column) => columns.includes(column)).slice(0, 6);
+      return columns
+        .filter((column) => {
+          const c = normalize(column);
+          return ![
+            "query",
+            "search",
+            "search_term",
+            "searchterm",
+            "term",
+            "timestamp",
+            "time",
+            "date",
+            "ip",
+            "ip_address",
+            "ipaddress",
+            "city",
+            "state",
+            "country",
+          ].includes(c);
+        })
+        .slice(0, 4);
+    });
+  }, [columns]);
+
+  const lastUpdatedLabel = (() => {
+    if (!meta?.lastUpdatedAt) return "Not available";
+    const d = new Date(meta.lastUpdatedAt);
+    if (Number.isNaN(d.getTime())) return meta.lastUpdatedAt;
+    return d.toLocaleString("en-IN", {
+      day: "2-digit",
+      month: "short",
+      year: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: true,
+    });
+  })();
+
+  function getDateLabel(item = {}) {
+    const raw = item.date || item.dateKey || item.timestamp || "";
+    if (!raw) return "-";
+    const d = new Date(String(raw).length === 10 ? `${raw}T00:00:00` : raw);
+    if (Number.isNaN(d.getTime())) return raw;
+    return d.toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" });
+  }
+
+  function getTimeLabel(item = {}) {
+    const timestamp = getSearchExplorerTimestamp(item);
+    if (!timestamp) return "-";
+    const timeMatch = String(timestamp).match(/(\d{1,2}:\d{2}(?::\d{2})?)/);
+    if (timeMatch) return timeMatch[1];
+    const d = new Date(timestamp);
+    if (!Number.isNaN(d.getTime())) {
+      return d.toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false });
+    }
+    return timestamp;
+  }
+
+  function rawPreview(item = {}) {
+    const entries = Object.entries(item.raw || {}).filter(([key, value]) => value !== undefined && value !== null && value !== "");
+    if (!entries.length) return "No raw columns available";
+    return entries.slice(0, 8).map(([key, value]) => `${key}: ${value}`).join(" • ");
+  }
+
+  function toggleRawColumn(column) {
+    setVisibleRawColumns((prev) =>
+      prev.includes(column)
+        ? prev.filter((x) => x !== column)
+        : [...prev, column].slice(-6)
+    );
+  }
+
+  return (
+    <div className="card glass" style={{ border: "1px solid rgba(34,197,94,0.28)", background: "rgba(5,25,16,0.46)" }}>
+      <div className="cardTitleRow">
+        <div>
+          <div className="cardTitle">Website Searches</div>
+          <div className="mutedSmall">
+            All first-party website searches from the search logging file, with grouping by IP, location, or any captured Excel column.
+          </div>
+        </div>
+        <div className="rowActions">
+          <button className="btnSecondary" onClick={loadWebsiteSearches} type="button" disabled={loading}>
+            {loading ? "Refreshing…" : "Refresh searches"}
+          </button>
+        </div>
+      </div>
+
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: "repeat(6, minmax(130px, 1fr))",
+          gap: 12,
+          marginTop: 14,
+        }}
+      >
+        {[
+          ["Search rows", formatNumberCompact(summary.total)],
+          ["Unique searches", formatNumberCompact(summary.uniqueQueries)],
+          ["Unique IPs", formatNumberCompact(summary.uniqueIps)],
+          ["Unique locations", formatNumberCompact(summary.uniqueLocations)],
+          ["Known phones", formatNumberCompact(summary.knownPhones)],
+          ["Known emails", formatNumberCompact(summary.knownEmails)],
+        ].map(([label, value]) => (
+          <div key={label} className="card" style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.10)" }}>
+            <div className="mutedSmall">{label}</div>
+            <div className="mono" style={{ fontSize: 18, marginTop: 6 }}>{value}</div>
+          </div>
+        ))}
+      </div>
+
+      <div className="card" style={{ marginTop: 12, background: "rgba(255,255,255,0.035)", border: "1px solid rgba(255,255,255,0.10)" }}>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(180px, 1fr))", gap: 12 }}>
+          <div>
+            <div className="mutedSmall">API source</div>
+            <div className="mono" style={{ marginTop: 4 }}>{meta?.source || "-"}</div>
+          </div>
+          <div>
+            <div className="mutedSmall">Last refreshed</div>
+            <div className="mono" style={{ marginTop: 4 }}>{lastUpdatedLabel}</div>
+          </div>
+          <div>
+            <div className="mutedSmall">Captured Excel columns</div>
+            <div className="mono" style={{ marginTop: 4 }}>{formatNumberCompact(columns.length)}</div>
+          </div>
+        </div>
+      </div>
+
+      <div className="historyTools" style={{ marginTop: 14, gridTemplateColumns: "minmax(260px, 1.6fr) minmax(210px, 0.7fr) auto" }}>
+        <input
+          className="input inputSm"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          placeholder="Search term / IP / city / phone / email / any raw Excel value…"
+        />
+        <select className="input inputSm" value={groupBy} onChange={(e) => setGroupBy(e.target.value)}>
+          {groupOptions.map((option) => (
+            <option key={option.value} value={option.value}>{option.label}</option>
+          ))}
+        </select>
+        <button className="btnSecondary" type="button" onClick={() => setSearch("")} disabled={!search}>
+          Clear
+        </button>
+      </div>
+
+      {columns.length ? (
+        <div className="card" style={{ marginTop: 12, background: "rgba(255,255,255,0.028)", border: "1px solid rgba(255,255,255,0.08)" }}>
+          <div className="mutedSmall" style={{ marginBottom: 8 }}>Optional raw Excel columns to show in the main table</div>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            {columns.slice(0, 40).map((column) => (
+              <button
+                key={column}
+                type="button"
+                className={visibleRawColumns.includes(column) ? "miniBtn" : "linkBtn"}
+                onClick={() => toggleRawColumn(column)}
+                style={{ border: visibleRawColumns.includes(column) ? "1px solid rgba(34,197,94,0.35)" : undefined }}
+              >
+                {column}
+              </button>
+            ))}
+          </div>
+        </div>
+      ) : null}
+
+      {error ? <div className="errorBox">Error: {error}</div> : null}
+
+      {loading && !items.length ? (
+        <div className="empty fancyEmpty" style={{ marginTop: 12 }}>
+          <div className="emptyIcon">🔎</div>
+          <div className="emptyTitle">Loading website searches…</div>
+          <div className="mutedSmall">Fetching the search logging rows from the website-searches API.</div>
+        </div>
+      ) : null}
+
+      {!loading && !items.length ? (
+        <div className="empty fancyEmpty" style={{ marginTop: 12 }}>
+          <div className="emptyIcon">🧾</div>
+          <div className="emptyTitle">No website searches found</div>
+          <div className="mutedSmall">Add VITE_WEBSITE_SEARCHES_API in Amplify, or point it temporarily to the existing Traffic Intelligence API if that response includes website_searches.</div>
+        </div>
+      ) : null}
+
+      {items.length ? (
+        <div style={{ marginTop: 14 }}>
+          {groupedItems.map((group) => {
+            const open = expandedGroups[group.key] !== undefined ? expandedGroups[group.key] : true;
+            const sampleTerms = Array.from(group.uniqueQueries || []).filter(Boolean).slice(0, 4).join(" • ");
+            return (
+              <div key={group.key} className="card" style={{ marginTop: 12, background: "rgba(255,255,255,0.035)", border: "1px solid rgba(34,197,94,0.16)" }}>
+                <div className="cardTitleRow">
+                  <div>
+                    <div className="cardTitle" style={{ fontSize: 15 }}>{group.label}</div>
+                    <div className="mutedSmall">
+                      {formatNumberCompact(group.items.length)} searches • {formatNumberCompact(group.uniqueQueryCount)} unique search terms • {formatNumberCompact(group.uniqueIpCount)} IPs
+                      {sampleTerms ? ` • ${sampleTerms}` : ""}
+                    </div>
+                  </div>
+                  <button className="btnSecondary" type="button" onClick={() => toggleGroup(group.key)}>
+                    {open ? "Minimize group" : "Expand group"}
+                  </button>
+                </div>
+
+                {open ? (
+                  <div className="tableWrap" style={{ marginTop: 10 }}>
+                    <table className="table">
+                      <thead>
+                        <tr>
+                          <th style={{ width: 112, textAlign: "center" }}>Date</th>
+                          <th style={{ width: 105, textAlign: "center" }}>Time</th>
+                          <th>Website search</th>
+                          <th style={{ width: 150, textAlign: "center" }}>IP</th>
+                          <th style={{ width: 210, textAlign: "center" }}>Location</th>
+                          <th style={{ width: 115, textAlign: "center" }}>Device</th>
+                          <th style={{ width: 180, textAlign: "center" }}>User info</th>
+                          {visibleRawColumns.map((column) => (
+                            <th key={column} style={{ minWidth: 140, textAlign: "center" }}>{column}</th>
+                          ))}
+                          <th style={{ width: 86, textAlign: "center" }}>Details</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {group.items.map((item) => {
+                          const rowOpen = Boolean(expandedRows[item.id]);
+                          return (
+                            <React.Fragment key={item.id}>
+                              <tr className="row">
+                                <td className="mono" style={{ textAlign: "center" }}>{getDateLabel(item)}</td>
+                                <td className="mono" style={{ textAlign: "center" }}>{getTimeLabel(item)}</td>
+                                <td>
+                                  <div className="titleCell">{item.query || "-"}</div>
+                                  <div className="mutedSmall">{item.source || "website_search_log"}</div>
+                                </td>
+                                <td className="mono" style={{ textAlign: "center" }}>{item.ip || "-"}</td>
+                                <td style={{ textAlign: "center" }}>
+                                  <div>{getSearchExplorerLocation(item)}</div>
+                                  {item.pincode ? <div className="mutedSmall">PIN: {item.pincode}</div> : null}
+                                </td>
+                                <td style={{ textAlign: "center" }}>{item.device || "-"}</td>
+                                <td style={{ textAlign: "center" }}>
+                                  <div>{item.phone || "-"}</div>
+                                  {item.email ? <div className="mutedSmall">{item.email}</div> : null}
+                                </td>
+                                {visibleRawColumns.map((column) => (
+                                  <td key={`${item.id}-${column}`} style={{ textAlign: "center" }}>
+                                    {String(getRawColumnValue(item.raw, column) || "-").slice(0, 80)}
+                                  </td>
+                                ))}
+                                <td style={{ textAlign: "center" }}>
+                                  <button className="miniBtn" type="button" onClick={() => toggleRow(item.id)}>
+                                    {rowOpen ? "Hide" : "View"}
+                                  </button>
+                                </td>
+                              </tr>
+                              {rowOpen ? (
+                                <tr className="row">
+                                  <td colSpan={8 + visibleRawColumns.length}>
+                                    <div className="card" style={{ background: "rgba(34,197,94,0.06)", border: "1px solid rgba(34,197,94,0.18)" }}>
+                                      <div className="mutedSmall">Raw search logging row</div>
+                                      <div style={{ marginTop: 8, display: "grid", gridTemplateColumns: "repeat(3, minmax(180px, 1fr))", gap: 10 }}>
+                                        {Object.entries(item.raw || {}).map(([key, value]) => (
+                                          <div key={key}>
+                                            <div className="mutedSmall">{key}</div>
+                                            <div>{String(value ?? "-")}</div>
+                                          </div>
+                                        ))}
+                                      </div>
+                                      <div className="mutedSmall" style={{ marginTop: 10 }}>{rawPreview(item)}</div>
+                                      <div style={{ display: "flex", gap: 8, marginTop: 12, flexWrap: "wrap" }}>
+                                        <button className="miniBtn" type="button" onClick={() => copyToClipboard(item.query || "")}>Copy search</button>
+                                        <button className="miniBtn" type="button" onClick={() => copyToClipboard(item.ip || "")}>Copy IP</button>
+                                        <button className="miniBtn" type="button" onClick={() => copyToClipboard(JSON.stringify(item.raw, null, 2))}>Copy raw row</button>
+                                      </div>
+                                    </div>
+                                  </td>
+                                </tr>
+                              ) : null}
+                            </React.Fragment>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                ) : null}
+              </div>
+            );
+          })}
         </div>
       ) : null}
     </div>
