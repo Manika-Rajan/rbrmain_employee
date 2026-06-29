@@ -3025,6 +3025,22 @@ export default function App() {
     }));
   }
 
+  function maximizeAllSearchExplorerGroups() {
+    const next = {};
+    groupedSearchExplorerItems.forEach((group) => {
+      next[group.key] = true;
+    });
+    setExpandedSearchExplorerGroups(next);
+  }
+
+  function minimizeAllSearchExplorerGroups() {
+    const next = {};
+    groupedSearchExplorerItems.forEach((group) => {
+      next[group.key] = false;
+    });
+    setExpandedSearchExplorerGroups(next);
+  }
+
   function toggleSearchExplorerRow(rowId) {
     setExpandedSearchExplorerRows((prev) => ({
       ...prev,
@@ -4671,6 +4687,8 @@ export default function App() {
                 expandedRows={expandedSearchExplorerRows}
                 toggleGroup={toggleSearchExplorerGroup}
                 toggleRow={toggleSearchExplorerRow}
+                maximizeAllGroups={maximizeAllSearchExplorerGroups}
+                minimizeAllGroups={minimizeAllSearchExplorerGroups}
                 meta={searchExplorerMeta}
                 loadWebsiteSearches={loadWebsiteSearches}
                 copyToClipboard={copyToClipboard}
@@ -5993,6 +6011,8 @@ function WebsiteSearchesPanel({
   expandedRows,
   toggleGroup,
   toggleRow,
+  maximizeAllGroups,
+  minimizeAllGroups,
   meta,
   loadWebsiteSearches,
   copyToClipboard,
@@ -6130,7 +6150,7 @@ function WebsiteSearchesPanel({
         </div>
       </div>
 
-      <div className="historyTools" style={{ marginTop: 14, gridTemplateColumns: "minmax(260px, 1.6fr) minmax(210px, 0.7fr) auto" }}>
+      <div className="historyTools" style={{ marginTop: 14, gridTemplateColumns: "minmax(260px, 1.6fr) minmax(210px, 0.7fr) auto auto auto" }}>
         <input
           className="input inputSm"
           value={search}
@@ -6142,6 +6162,12 @@ function WebsiteSearchesPanel({
             <option key={option.value} value={option.value}>{option.label}</option>
           ))}
         </select>
+        <button className="btnSecondary" type="button" onClick={maximizeAllGroups} disabled={!groupedItems.length}>
+          Maximize all groups
+        </button>
+        <button className="btnSecondary" type="button" onClick={minimizeAllGroups} disabled={!groupedItems.length}>
+          Minimize all groups
+        </button>
         <button className="btnSecondary" type="button" onClick={() => setSearch("")} disabled={!search}>
           Clear
         </button>
