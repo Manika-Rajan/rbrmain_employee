@@ -1162,6 +1162,178 @@ function groupSalesByMonthAndDate(items) {
   }));
 }
 
+
+const DEFAULT_BULK_REPORT_DRAFT = {
+  report_id: "",
+  report_name: "",
+  slug: "",
+  enabled: true,
+  keywordsText: "",
+  remarks: "",
+  segments: [
+    {
+      id: "seg_market_snapshot",
+      heading: "Market Snapshot",
+      source_table: "rbrmain-import_export_companies",
+      description: "Pulls the latest records from DynamoDB and prints them as a report section.",
+      filter_attribute: "",
+      filter_operator: "contains",
+      filter_value: "",
+      columnsText: "company_name, country, product, brands, email, phone, supply_requested",
+      row_limit: 25,
+    },
+  ],
+};
+
+function makeBulkReportId() {
+  return `bulk_${Math.random().toString(16).slice(2, 10)}`;
+}
+
+function makeEmptyBulkSegment(index = 1) {
+  return {
+    id: `seg_${Math.random().toString(16).slice(2, 8)}`,
+    heading: `Segment ${index}`,
+    source_table: "",
+    description: "",
+    filter_attribute: "",
+    filter_operator: "contains",
+    filter_value: "",
+    columnsText: "",
+    row_limit: 25,
+  };
+}
+
+function makeBulkReportDraft() {
+  const now = nowIso();
+  return {
+    ...deepClone(DEFAULT_BULK_REPORT_DRAFT),
+    report_id: makeBulkReportId(),
+    created_at: now,
+    updated_at: now,
+    last_updated_date: "Never generated",
+  };
+}
+
+function listFromText(value = "") {
+  if (Array.isArray(value)) return value.map((x) => String(x || "").trim()).filter(Boolean);
+  return String(value || "")
+    .split(/[|,\n]/g)
+    .map((x) => x.trim())
+    .filter(Boolean);
+}
+
+function normalizeBulkSegment(segment = {}, index = 0) {
+  const columns = Array.isArray(segment.columns)
+    ? segment.columns
+    : listFromText(segment.columnsText || segment.columns_text || segment.column_names || "");
+
+  return {
+    id: segment.id || `seg_${index + 1}`,
+    heading: segment.heading || segment.title || `Segment ${index + 1}`,
+    source_table: segment.source_table || segment.sourceTable || segment.table || "",
+    description: segment.description || segment.notes || "",
+    filter_attribute: segment.filter_attribute || segment.filterAttribute || "",
+    filter_operator: segment.filter_operator || segment.filterOperator || "contains",
+    filter_value: segment.filter_value || segment.filterValue || "",
+    columns,
+    columnsText: columns.join(", "),
+    row_limit: Number(segment.row_limit || segment.rowLimit || segment.limit || 25) || 25,
+  };
+}
+
+function normalizeBulkReport(item = {}, index = 0) {
+  const segments = Array.isArray(item.segments) ? item.segments.map(normalizeBulkSegment) : [];
+  const keywords = Array.isArray(item.keywords) ? item.keywords : listFromText(item.keywordsText || item.keywords_text || "");
+  const reportName = item.report_name || item.reportName || item.title || item.name || "Untitled bulk report";
+
+  return {
+    id: item.report_id || item.reportId || item.id || item.slug || `bulk-${index}`,
+    report_id: item.report_id || item.reportId || item.id || `bulk-${index}`,
+    report_name: reportName,
+    slug: item.slug || normalizeSlug(reportName),
+    enabled: item.enabled !== false && String(item.status || "").toLowerCase() !== "disabled",
+    status: item.status || (item.enabled === false ? "disabled" : "active"),
+    keywords,
+    keywordsText: keywords.join(", "),
+    remarks: item.remarks || item.notes || item.complaints_note || "",
+    segments,
+    last_updated_date: item.last_updated_date || item.lastUpdatedDate || item.lastGeneratedAt || item.last_generated_at || "Never generated",
+    last_run_status: item.last_run_status || item.lastRunStatus || "",
+    full_key: item.full_key || item.fullKey || "",
+    preview_key: item.preview_key || item.previewKey || "",
+    updated_at: item.updated_at || item.updatedAt || "",
+    created_at: item.created_at || item.createdAt || "",
+    raw: item,
+  };
+}
+
+function normalizeBulkReportsPayload(payload) {
+  const parsed = unwrapApiPayload(payload);
+  const rawItems = Array.isArray(parsed)
+    ? parsed
+    : Array.isArray(parsed?.items)
+    ? parsed.items
+    : Array.isArray(parsed?.reports)
+    ? parsed.reports
+    : Array.isArray(parsed?.data)
+    ? parsed.data
+    : [];
+
+  return {
+    items: rawItems.map(normalizeBulkReport),
+    total: Number(parsed?.total || parsed?.count || rawItems.length || 0),
+    source: parsed?.source || "bulk_reports_api",
+    lastRunAt: parsed?.lastRunAt || parsed?.last_run_at || "",
+    raw: parsed,
+  };
+}
+
+function bulkDraftToPayload(draft = {}) {
+  const reportName = String(draft.report_name || draft.reportName || "").trim();
+  const slug = normalizeSlug(draft.slug || reportName);
+
+  return {
+    report_id: draft.report_id || draft.id || makeBulkReportId(),
+    report_name: reportName,
+    slug,
+    enabled: draft.enabled !== false,
+    keywords: listFromText(draft.keywordsText || draft.keywords || ""),
+    remarks: draft.remarks || "",
+    segments: (draft.segments || []).map((segment, index) => {
+      const normalized = normalizeBulkSegment(segment, index);
+      return {
+        id: normalized.id,
+        heading: normalized.heading,
+        source_table: normalized.source_table,
+        description: normalized.description,
+        filter_attribute: normalized.filter_attribute,
+        filter_operator: normalized.filter_operator,
+        filter_value: normalized.filter_value,
+        columns: listFromText(segment.columnsText || normalized.columns),
+        row_limit: Number(normalized.row_limit || 25) || 25,
+      };
+    }),
+  };
+}
+
+function formatBulkDate(value) {
+  if (!value || value === "Never generated") return "Never generated";
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return String(value);
+  try {
+    return d.toLocaleString("en-IN", {
+      day: "2-digit",
+      month: "short",
+      year: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: true,
+    });
+  } catch {
+    return String(value);
+  }
+}
+
 export default function App() {
   const CONFIRM_API = import.meta.env.VITE_CONFIRM_API;
   const STATUS_API = import.meta.env.VITE_STATUS_API;
@@ -1177,6 +1349,7 @@ export default function App() {
   const TRAFFIC_INTELLIGENCE_API = import.meta.env.VITE_TRAFFIC_INTELLIGENCE_API || "";
   const GOOGLE_ADS_UPDATE_API = import.meta.env.VITE_GOOGLE_ADS_UPDATE_API || "";
   const WEBSITE_SEARCHES_API = import.meta.env.VITE_WEBSITE_SEARCHES_API || TRAFFIC_INTELLIGENCE_API || "";
+  const BULK_REPORTS_API = import.meta.env.VITE_BULK_REPORTS_API || "";
   const SUGGEST_API = "https://vtwyu7hv50.execute-api.ap-south-1.amazonaws.com/default/suggest";
   const SUGGEST_PREVIEW_API = "https://vtwyu7hv50.execute-api.ap-south-1.amazonaws.com/default/RBR_report_pre-signed_URL";
 
@@ -1196,6 +1369,7 @@ export default function App() {
   const isSales = activeTab === "sales";
   const isTrafficIntelligence = activeTab === "traffic-intelligence";
   const isWebsiteSearches = activeTab === "website-searches";
+  const isBulkReports = activeTab === "bulk-reports";
   const isInstantAdmin = activeTab === "instant" && instantAdminTab !== "generate";
 
   const theme = useMemo(() => {
@@ -1315,6 +1489,16 @@ export default function App() {
   const [expandedSearchExplorerGroups, setExpandedSearchExplorerGroups] = useState({});
   const [expandedSearchExplorerRows, setExpandedSearchExplorerRows] = useState({});
   const [searchExplorerMeta, setSearchExplorerMeta] = useState({ total: 0, source: "", lastUpdatedAt: "", dateRange: null });
+  const [bulkReports, setBulkReports] = useState([]);
+  const [bulkReportsLoading, setBulkReportsLoading] = useState(false);
+  const [bulkReportsSaving, setBulkReportsSaving] = useState(false);
+  const [bulkReportsRunning, setBulkReportsRunning] = useState(false);
+  const [bulkReportsError, setBulkReportsError] = useState("");
+  const [bulkReportsSearch, setBulkReportsSearch] = useState("");
+  const [bulkReportsMeta, setBulkReportsMeta] = useState({ total: 0, source: "", lastRunAt: "" });
+  const [bulkDraft, setBulkDraft] = useState(() => makeBulkReportDraft());
+  const [bulkSelectedReportId, setBulkSelectedReportId] = useState("");
+  const [expandedBulkReports, setExpandedBulkReports] = useState({});
   const [suggestTesterQuery, setSuggestTesterQuery] = useState("");
   const [suggestLoading, setSuggestLoading] = useState(false);
   const [suggestError, setSuggestError] = useState("");
@@ -1440,6 +1624,11 @@ export default function App() {
   useEffect(() => {
     if (activeTab !== "website-searches") return;
     loadWebsiteSearches();
+  }, [activeTab]);
+
+  useEffect(() => {
+    if (activeTab !== "bulk-reports") return;
+    loadBulkReports();
   }, [activeTab]);
 
   const activeHistory = activeTab === "instant" ? history : activeTab === "prebook" ? prebookHistory : [];
@@ -1603,6 +1792,44 @@ export default function App() {
   const searchExplorerSummary = useMemo(() => {
     return summarizeSearchExplorerItems(filteredSearchExplorerItems);
   }, [filteredSearchExplorerItems]);
+
+
+  const filteredBulkReports = useMemo(() => {
+    const q = normalize(bulkReportsSearch);
+    if (!q) return bulkReports;
+    return bulkReports.filter((report) =>
+      [
+        report.report_name,
+        report.slug,
+        report.report_id,
+        report.status,
+        report.remarks,
+        ...(report.keywords || []),
+        ...(report.segments || []).flatMap((segment) => [
+          segment.heading,
+          segment.source_table,
+          segment.filter_attribute,
+          segment.filter_value,
+          ...(segment.columns || []),
+        ]),
+      ]
+        .map(normalize)
+        .some((value) => value.includes(q))
+    );
+  }, [bulkReports, bulkReportsSearch]);
+
+  const bulkReportsSummary = useMemo(() => {
+    return filteredBulkReports.reduce(
+      (acc, report) => {
+        acc.total += 1;
+        if (report.enabled) acc.enabled += 1;
+        else acc.disabled += 1;
+        acc.segments += (report.segments || []).length;
+        return acc;
+      },
+      { total: 0, enabled: 0, disabled: 0, segments: 0 }
+    );
+  }, [filteredBulkReports]);
 
   const adsQualityOptions = useMemo(() => {
     return ["all", ...Array.from(new Set(adsItems.map((x) => x.quality).filter(Boolean)))];
@@ -3113,6 +3340,209 @@ export default function App() {
     }
   }
 
+
+  function ensureBulkReportsApi() {
+    if (!BULK_REPORTS_API) {
+      setBulkReportsError("Missing env var: VITE_BULK_REPORTS_API. Add your bulk reports admin Lambda/API Gateway URL in Amplify env vars and redeploy.");
+      return false;
+    }
+    return true;
+  }
+
+  async function callBulkReportsApi(action, payload = {}) {
+    if (!ensureBulkReportsApi()) return null;
+
+    const { res, data } = await fetchJson(BULK_REPORTS_API, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action, ...payload }),
+    });
+
+    if (!res.ok || data?.ok === false) {
+      throw new Error(buildErrorMessage(res, data, `Bulk Reports API failed: ${action}`));
+    }
+
+    return data;
+  }
+
+  async function loadBulkReports() {
+    setBulkReportsLoading(true);
+    setBulkReportsError("");
+
+    if (!BULK_REPORTS_API) {
+      setBulkReports([]);
+      setBulkReportsMeta({ total: 0, source: "", lastRunAt: "" });
+      setBulkReportsLoading(false);
+      setBulkReportsError("Missing env var: VITE_BULK_REPORTS_API. Add your bulk reports admin Lambda/API Gateway URL in Amplify env vars and redeploy.");
+      return;
+    }
+
+    try {
+      const data = await callBulkReportsApi("list");
+      const normalized = normalizeBulkReportsPayload(data);
+      setBulkReports(normalized.items);
+      setBulkReportsMeta({
+        total: normalized.total,
+        source: normalized.source,
+        lastRunAt: normalized.lastRunAt,
+      });
+    } catch (e) {
+      setBulkReports([]);
+      setBulkReportsMeta({ total: 0, source: "", lastRunAt: "" });
+      setBulkReportsError(e?.message || "Failed to load bulk reports");
+    } finally {
+      setBulkReportsLoading(false);
+    }
+  }
+
+  function resetBulkDraft() {
+    setBulkDraft(makeBulkReportDraft());
+    setBulkSelectedReportId("");
+  }
+
+  function editBulkReport(report) {
+    setBulkSelectedReportId(report.report_id);
+    setBulkDraft(deepClone(report));
+    setExpandedBulkReports((prev) => ({ ...prev, [report.report_id]: true }));
+  }
+
+  function updateBulkDraftField(key, value) {
+    setBulkDraft((prev) => {
+      const next = { ...prev, [key]: value };
+      if (key === "report_name" && !prev.slug) {
+        next.slug = normalizeSlug(value);
+      }
+      return next;
+    });
+  }
+
+  function updateBulkDraftSegment(index, key, value) {
+    setBulkDraft((prev) => ({
+      ...prev,
+      segments: (prev.segments || []).map((segment, i) =>
+        i === index ? { ...segment, [key]: value } : segment
+      ),
+    }));
+  }
+
+  function addBulkDraftSegment() {
+    setBulkDraft((prev) => ({
+      ...prev,
+      segments: [...(prev.segments || []), makeEmptyBulkSegment((prev.segments || []).length + 1)],
+    }));
+  }
+
+  function removeBulkDraftSegment(index) {
+    setBulkDraft((prev) => ({
+      ...prev,
+      segments: (prev.segments || []).filter((_, i) => i !== index),
+    }));
+  }
+
+  async function saveBulkReportDraft() {
+    setBulkReportsSaving(true);
+    setBulkReportsError("");
+
+    try {
+      const payload = bulkDraftToPayload(bulkDraft);
+      if (!payload.report_name) throw new Error("Report name is required.");
+      if (!payload.slug) throw new Error("Report slug is required.");
+      if (!payload.segments.length) throw new Error("Add at least one segment.");
+      const missingTable = payload.segments.find((segment) => !segment.source_table);
+      if (missingTable) throw new Error(`DynamoDB table missing for segment: ${missingTable.heading}`);
+
+      const data = await callBulkReportsApi("save", { report: payload });
+      const saved = normalizeBulkReport(data?.report || payload);
+      setBulkReports((prev) => {
+        const exists = prev.some((r) => r.report_id === saved.report_id);
+        return exists ? prev.map((r) => (r.report_id === saved.report_id ? saved : r)) : [saved, ...prev];
+      });
+      setBulkSelectedReportId(saved.report_id);
+      setBulkDraft(saved);
+      setToast("Bulk report saved ✅");
+    } catch (e) {
+      setBulkReportsError(e?.message || "Failed to save bulk report");
+    } finally {
+      setBulkReportsSaving(false);
+    }
+  }
+
+  async function toggleBulkReport(report) {
+    setBulkReportsSaving(true);
+    setBulkReportsError("");
+    try {
+      const data = await callBulkReportsApi("toggle", {
+        report_id: report.report_id,
+        enabled: !report.enabled,
+      });
+      const updated = normalizeBulkReport(data?.report || { ...report, enabled: !report.enabled });
+      setBulkReports((prev) => prev.map((r) => (r.report_id === updated.report_id ? updated : r)));
+      if (bulkSelectedReportId === updated.report_id) setBulkDraft(updated);
+      setToast(updated.enabled ? "Report enabled ✅" : "Report disabled");
+    } catch (e) {
+      setBulkReportsError(e?.message || "Failed to update report status");
+    } finally {
+      setBulkReportsSaving(false);
+    }
+  }
+
+  async function deleteBulkReport(report) {
+    setBulkReportsSaving(true);
+    setBulkReportsError("");
+    try {
+      await callBulkReportsApi("delete", { report_id: report.report_id });
+      setBulkReports((prev) => prev.filter((r) => r.report_id !== report.report_id));
+      if (bulkSelectedReportId === report.report_id) resetBulkDraft();
+      setToast("Bulk report deleted");
+    } catch (e) {
+      setBulkReportsError(e?.message || "Failed to delete bulk report");
+    } finally {
+      setBulkReportsSaving(false);
+    }
+  }
+
+  async function runBulkReport(report) {
+    setBulkReportsRunning(true);
+    setBulkReportsError("");
+    try {
+      const data = await callBulkReportsApi("run_one", { report_id: report.report_id });
+      const updated = normalizeBulkReport(data?.report || data?.item || report);
+      setBulkReports((prev) => prev.map((r) => (r.report_id === updated.report_id ? updated : r)));
+      if (bulkSelectedReportId === updated.report_id) setBulkDraft(updated);
+      setBulkReportsMeta((prev) => ({ ...prev, lastRunAt: data?.lastRunAt || data?.last_run_at || nowIso() }));
+      setToast("Report regenerated and published ✅");
+    } catch (e) {
+      setBulkReportsError(e?.message || "Failed to regenerate report");
+    } finally {
+      setBulkReportsRunning(false);
+    }
+  }
+
+  async function runEnabledBulkReports() {
+    setBulkReportsRunning(true);
+    setBulkReportsError("");
+    try {
+      const data = await callBulkReportsApi("run_enabled", { requestedAt: nowIso() });
+      const normalized = normalizeBulkReportsPayload(data);
+      if (normalized.items.length) setBulkReports(normalized.items);
+      setBulkReportsMeta({
+        total: normalized.total || bulkReports.length,
+        source: normalized.source || "bulk_reports_api",
+        lastRunAt: data?.lastRunAt || data?.last_run_at || nowIso(),
+      });
+      setToast(`Bulk update completed ✅ ${data?.updated_count ?? normalized.items.length ?? 0} report(s)`);
+      await loadBulkReports();
+    } catch (e) {
+      setBulkReportsError(e?.message || "Failed to run enabled bulk reports");
+    } finally {
+      setBulkReportsRunning(false);
+    }
+  }
+
+  function toggleBulkReportExpanded(reportId) {
+    setExpandedBulkReports((prev) => ({ ...prev, [reportId]: !prev[reportId] }));
+  }
+
   const leftStatus = prettyStatus(leftItem?.status);
   const rightStatus = prettyStatus(rightItem?.status);
 
@@ -3982,6 +4412,25 @@ export default function App() {
               >
                 Website Searches
               </button>
+              <button
+                type="button"
+                className="chipPill"
+                onClick={() => setActiveTab("bulk-reports")}
+                style={{
+                  border:
+                    activeTab === "bulk-reports"
+                      ? "1px solid rgba(99,102,241,0.54)"
+                      : "1px solid rgba(255,255,255,0.14)",
+                  background:
+                    activeTab === "bulk-reports" ? "rgba(99,102,241,0.18)" : "rgba(255,255,255,0.08)",
+                  color:
+                    activeTab === "bulk-reports"
+                      ? "rgba(224,231,255,0.98)"
+                      : "rgba(255,255,255,0.88)",
+                }}
+              >
+                Bulk Reports
+              </button>
             </div>
 
             {activeTab === "instant" ? (
@@ -4606,8 +5055,8 @@ export default function App() {
           </>
         ) : null}
 
-        <div className={clsx("body", (leftHidden || isPrebook || isCatalog || isSales || isTrafficIntelligence || isWebsiteSearches || isInstantAdmin) && "bodyFull")}>
-          {!leftHidden && !isPrebook && !isCatalog && !isSales && !isTrafficIntelligence && !isWebsiteSearches && !isInstantAdmin ? (
+        <div className={clsx("body", (leftHidden || isPrebook || isCatalog || isSales || isTrafficIntelligence || isWebsiteSearches || isBulkReports || isInstantAdmin) && "bodyFull")}>
+          {!leftHidden && !isPrebook && !isCatalog && !isSales && !isTrafficIntelligence && !isWebsiteSearches && !isBulkReports && !isInstantAdmin ? (
             <aside className="left">
               <div className="panelScroll">
                 <div className="card glass">
@@ -4670,7 +5119,36 @@ export default function App() {
           ) : null}
 
           <main className="right">
-            {isWebsiteSearches ? (
+            {isBulkReports ? (
+              <BulkReportsPanel
+                reports={filteredBulkReports}
+                summary={bulkReportsSummary}
+                loading={bulkReportsLoading}
+                saving={bulkReportsSaving}
+                running={bulkReportsRunning}
+                error={bulkReportsError}
+                search={bulkReportsSearch}
+                setSearch={setBulkReportsSearch}
+                meta={bulkReportsMeta}
+                draft={bulkDraft}
+                selectedReportId={bulkSelectedReportId}
+                updateDraftField={updateBulkDraftField}
+                updateDraftSegment={updateBulkDraftSegment}
+                addDraftSegment={addBulkDraftSegment}
+                removeDraftSegment={removeBulkDraftSegment}
+                saveDraft={saveBulkReportDraft}
+                resetDraft={resetBulkDraft}
+                editReport={editBulkReport}
+                deleteReport={deleteBulkReport}
+                toggleReport={toggleBulkReport}
+                runReport={runBulkReport}
+                runEnabledReports={runEnabledBulkReports}
+                loadReports={loadBulkReports}
+                expandedReports={expandedBulkReports}
+                toggleExpanded={toggleBulkReportExpanded}
+                copyToClipboard={copyToClipboard}
+              />
+            ) : isWebsiteSearches ? (
               <WebsiteSearchesPanel
                 items={filteredSearchExplorerItems}
                 groupedItems={groupedSearchExplorerItems}
@@ -4846,7 +5324,7 @@ export default function App() {
               </div>
             ) : null}
 
-              {!isPrebook && !isCatalog && !isSales && !isTrafficIntelligence && !isWebsiteSearches && !isInstantAdmin ? (
+              {!isPrebook && !isCatalog && !isSales && !isTrafficIntelligence && !isWebsiteSearches && !isBulkReports && !isInstantAdmin ? (
                 <div className="card glass" style={{ marginBottom: 12, width: "100%" }}>
                   <div className="cardTitleRow">
                     <div className="cardTitle">Generated Reports (Instant)</div>
@@ -4916,12 +5394,383 @@ export default function App() {
         <footer className="footer">
           {isSales
             ? "Tip: Expand a month, then expand a sale date to audit each purchase with customer and report details."
+            : isBulkReports
+            ? "Tip: Keep enabled reports small enough for one Lambda run, then schedule the same API later if you want automatic refresh."
             : isCatalog
             ? "Tip: Use this tab to compare catalog records against live /suggest output and improve relevance."
             : isInstantAdmin
             ? "Tip: Keep search mappings curated. They control which importer categories appear in instant reports."
             : "Tip: Generate 2–3 reports with small prompt changes and compare output quality."}
         </footer>
+      </div>
+    </div>
+  );
+}
+
+
+function BulkReportsPanel({
+  reports,
+  summary,
+  loading,
+  saving,
+  running,
+  error,
+  search,
+  setSearch,
+  meta,
+  draft,
+  selectedReportId,
+  updateDraftField,
+  updateDraftSegment,
+  addDraftSegment,
+  removeDraftSegment,
+  saveDraft,
+  resetDraft,
+  editReport,
+  deleteReport,
+  toggleReport,
+  runReport,
+  runEnabledReports,
+  loadReports,
+  expandedReports,
+  toggleExpanded,
+  copyToClipboard,
+}) {
+  const normalizedDraftSlug = normalizeSlug(draft?.slug || draft?.report_name || "");
+
+  return (
+    <div style={{ display: "grid", gap: 14 }}>
+      <div
+        className="card glass"
+        style={{
+          border: "1px solid rgba(99,102,241,0.30)",
+          background: "rgba(10,12,24,0.62)",
+        }}
+      >
+        <div className="cardTitleRow" style={{ alignItems: "flex-start", gap: 12 }}>
+          <div>
+            <div className="cardTitle">Bulk Reports Updater</div>
+            <div className="mutedSmall" style={{ marginTop: 4 }}>
+              Maintain production-ready report PDFs from DynamoDB tables and publish them into the same catalog used by website suggestions.
+            </div>
+          </div>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "flex-end" }}>
+            <button className="btnSecondary" type="button" onClick={loadReports} disabled={loading || running || saving}>
+              {loading ? "Refreshing…" : "Refresh list"}
+            </button>
+            <button className="btn" type="button" onClick={runEnabledReports} disabled={running || saving || loading}>
+              {running ? "Updating reports…" : "Run all enabled reports"}
+            </button>
+          </div>
+        </div>
+
+        <div className="statsGrid" style={{ marginTop: 14 }}>
+          <div className="statCard"><div className="mutedSmall">Reports shown</div><div className="statValue">{summary.total}</div></div>
+          <div className="statCard"><div className="mutedSmall">Enabled</div><div className="statValue">{summary.enabled}</div></div>
+          <div className="statCard"><div className="mutedSmall">Disabled</div><div className="statValue">{summary.disabled}</div></div>
+          <div className="statCard"><div className="mutedSmall">Segments</div><div className="statValue">{summary.segments}</div></div>
+        </div>
+
+        <div className="mutedSmall" style={{ marginTop: 10 }}>
+          API source: <span className="mono">{meta.source || "not connected"}</span>
+          {meta.lastRunAt ? <> • Last run: <span className="mono">{formatBulkDate(meta.lastRunAt)}</span></> : null}
+        </div>
+        {error ? <div className="errorBox" style={{ marginTop: 12 }}>Error: {error}</div> : null}
+      </div>
+
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: "minmax(360px, 0.95fr) minmax(520px, 1.3fr)",
+          gap: 14,
+          alignItems: "start",
+        }}
+      >
+        <section className="card glass" style={{ border: "1px solid rgba(99,102,241,0.24)", background: "rgba(255,255,255,0.045)" }}>
+          <div className="cardTitleRow">
+            <div>
+              <div className="cardTitle">{selectedReportId ? "Edit bulk report" : "Create bulk report"}</div>
+              <div className="mutedSmall">Define the report name, suggestion slug, keywords, and source tables for each segment.</div>
+            </div>
+            <button className="linkBtn" type="button" onClick={resetDraft}>New</button>
+          </div>
+
+          <div style={{ display: "grid", gap: 12, marginTop: 12 }}>
+            <div>
+              <label className="label">Report name</label>
+              <input
+                className="input"
+                value={draft.report_name || ""}
+                onChange={(e) => updateDraftField("report_name", e.target.value)}
+                placeholder="e.g., Readymade Garments Importers in Malaysia"
+              />
+            </div>
+
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 0.75fr", gap: 10 }}>
+              <div>
+                <label className="label">Suggestion slug / PDF name</label>
+                <input
+                  className="input"
+                  value={draft.slug || ""}
+                  onChange={(e) => updateDraftField("slug", normalizeSlug(e.target.value))}
+                  placeholder="readymade_garments_malaysia"
+                />
+                <div className="mutedSmall" style={{ marginTop: 5 }}>
+                  Final keys: <span className="mono">{normalizedDraftSlug || "slug"}.pdf</span> and <span className="mono">{normalizedDraftSlug || "slug"}_preview.pdf</span>
+                </div>
+              </div>
+
+              <div>
+                <label className="label">Status</label>
+                <select
+                  className="input"
+                  value={draft.enabled === false ? "disabled" : "enabled"}
+                  onChange={(e) => updateDraftField("enabled", e.target.value === "enabled")}
+                >
+                  <option value="enabled">Enabled</option>
+                  <option value="disabled">Disabled</option>
+                </select>
+              </div>
+            </div>
+
+            <div>
+              <label className="label">Suggestion keywords</label>
+              <textarea
+                className="textarea"
+                rows={2}
+                value={draft.keywordsText || ""}
+                onChange={(e) => updateDraftField("keywordsText", e.target.value)}
+                placeholder="Comma or line separated: garments, apparel buyers, Malaysia importers"
+              />
+            </div>
+
+            <div>
+              <label className="label">Admin remarks / complaint note</label>
+              <textarea
+                className="textarea"
+                rows={2}
+                value={draft.remarks || ""}
+                onChange={(e) => updateDraftField("remarks", e.target.value)}
+                placeholder="Use this to record why a report was disabled or what should be improved."
+              />
+            </div>
+
+            <div className="card" style={{ background: "rgba(0,0,0,0.12)", border: "1px solid rgba(255,255,255,0.10)" }}>
+              <div className="cardTitleRow">
+                <div>
+                  <div className="cardTitle" style={{ fontSize: 15 }}>Report segments</div>
+                  <div className="mutedSmall">Each segment pulls latest rows from one DynamoDB table when you run the updater.</div>
+                </div>
+                <button className="linkBtn" type="button" onClick={addDraftSegment}>Add segment</button>
+              </div>
+
+              <div style={{ display: "grid", gap: 12, marginTop: 12 }}>
+                {(draft.segments || []).map((segment, index) => (
+                  <div key={segment.id || index} className="card" style={{ background: "rgba(255,255,255,0.035)", border: "1px solid rgba(255,255,255,0.10)" }}>
+                    <div className="cardTitleRow">
+                      <div className="mutedSmall">Segment {index + 1}</div>
+                      <button className="chipDanger" type="button" onClick={() => removeDraftSegment(index)} disabled={(draft.segments || []).length <= 1}>
+                        Remove
+                      </button>
+                    </div>
+
+                    <div style={{ display: "grid", gap: 10, marginTop: 10 }}>
+                      <div>
+                        <label className="label">Segment heading</label>
+                        <input
+                          className="input"
+                          value={segment.heading || ""}
+                          onChange={(e) => updateDraftSegment(index, "heading", e.target.value)}
+                          placeholder="e.g., Importer Companies"
+                        />
+                      </div>
+
+                      <div>
+                        <label className="label">DynamoDB table name</label>
+                        <input
+                          className="input mono"
+                          value={segment.source_table || ""}
+                          onChange={(e) => updateDraftSegment(index, "source_table", e.target.value)}
+                          placeholder="rbrmain-import_export_companies"
+                        />
+                      </div>
+
+                      <div style={{ display: "grid", gridTemplateColumns: "1fr 0.75fr 1fr", gap: 10 }}>
+                        <div>
+                          <label className="label">Filter attribute</label>
+                          <input
+                            className="input"
+                            value={segment.filter_attribute || ""}
+                            onChange={(e) => updateDraftSegment(index, "filter_attribute", e.target.value)}
+                            placeholder="product"
+                          />
+                        </div>
+                        <div>
+                          <label className="label">Filter type</label>
+                          <select
+                            className="input"
+                            value={segment.filter_operator || "contains"}
+                            onChange={(e) => updateDraftSegment(index, "filter_operator", e.target.value)}
+                          >
+                            <option value="contains">contains</option>
+                            <option value="equals">equals</option>
+                            <option value="starts_with">starts with</option>
+                          </select>
+                        </div>
+                        <div>
+                          <label className="label">Filter value</label>
+                          <input
+                            className="input"
+                            value={segment.filter_value || ""}
+                            onChange={(e) => updateDraftSegment(index, "filter_value", e.target.value)}
+                            placeholder="readymade garments"
+                          />
+                        </div>
+                      </div>
+
+                      <div>
+                        <label className="label">Columns to print</label>
+                        <textarea
+                          className="textarea"
+                          rows={2}
+                          value={segment.columnsText || ""}
+                          onChange={(e) => updateDraftSegment(index, "columnsText", e.target.value)}
+                          placeholder="company_name, country, product, email, phone"
+                        />
+                      </div>
+
+                      <div style={{ display: "grid", gridTemplateColumns: "110px 1fr", gap: 10, alignItems: "start" }}>
+                        <div>
+                          <label className="label">Row limit</label>
+                          <input
+                            className="input"
+                            type="number"
+                            min="1"
+                            max="200"
+                            value={segment.row_limit || 25}
+                            onChange={(e) => updateDraftSegment(index, "row_limit", e.target.value)}
+                          />
+                        </div>
+                        <div>
+                          <label className="label">Section note</label>
+                          <input
+                            className="input"
+                            value={segment.description || ""}
+                            onChange={(e) => updateDraftSegment(index, "description", e.target.value)}
+                            placeholder="Optional explanatory line printed below the section heading."
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+              <button className="btn" type="button" onClick={saveDraft} disabled={saving || running}>
+                {saving ? "Saving…" : "Save report definition"}
+              </button>
+              <button className="btnSecondary" type="button" onClick={resetDraft} disabled={saving || running}>Clear form</button>
+            </div>
+          </div>
+        </section>
+
+        <section className="card glass" style={{ border: "1px solid rgba(255,255,255,0.12)", background: "rgba(255,255,255,0.045)" }}>
+          <div className="cardTitleRow">
+            <div>
+              <div className="cardTitle">Reports kept up to date</div>
+              <div className="mutedSmall">Enable, disable, regenerate, edit names, or remove reports from the maintenance list.</div>
+            </div>
+            <input
+              className="input inputSm"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Search reports / tables / keywords…"
+              style={{ maxWidth: 320 }}
+            />
+          </div>
+
+          {loading ? (
+            <div className="empty fancyEmpty"><div className="emptyIcon">⏳</div><div className="emptyTitle">Loading bulk reports…</div></div>
+          ) : !reports.length ? (
+            <div className="empty fancyEmpty">
+              <div className="emptyIcon">📚</div>
+              <div className="emptyTitle">No bulk reports yet</div>
+              <div className="mutedSmall">Create your first report definition on the left, then run the updater.</div>
+            </div>
+          ) : (
+            <div style={{ display: "grid", gap: 10, marginTop: 12 }}>
+              {reports.map((report, index) => {
+                const isOpen = expandedReports[report.report_id] !== undefined ? expandedReports[report.report_id] : index === 0;
+                return (
+                  <div key={report.report_id} className="card" style={{ border: report.enabled ? "1px solid rgba(99,102,241,0.24)" : "1px solid rgba(248,113,113,0.22)", background: report.enabled ? "rgba(99,102,241,0.055)" : "rgba(127,29,29,0.08)" }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "flex-start", flexWrap: "wrap" }}>
+                      <button className="linkBtn" type="button" onClick={() => toggleExpanded(report.report_id)} style={{ textAlign: "left", paddingLeft: 0 }}>
+                        <span style={{ fontSize: 16, fontWeight: 800 }}>{isOpen ? "▾" : "▸"} {report.report_name}</span>
+                        <div className="mutedSmall" style={{ marginTop: 4 }}>
+                          <span className="mono">{report.slug}</span> • {report.segments.length} segment(s) • Last updated: {formatBulkDate(report.last_updated_date)}
+                        </div>
+                      </button>
+
+                      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "flex-end" }}>
+                        <span className={clsx("badge", report.enabled ? "st-done" : "st-failed")}>{report.enabled ? "enabled" : "disabled"}</span>
+                        <button className="chip" type="button" onClick={() => editReport(report)}>Edit</button>
+                        <button className="chip" type="button" onClick={() => runReport(report)} disabled={running || saving || !report.enabled}>{running ? "Running…" : "Run"}</button>
+                        <button className="chip" type="button" onClick={() => toggleReport(report)} disabled={saving || running}>{report.enabled ? "Disable" : "Enable"}</button>
+                        <button className="chipDanger" type="button" onClick={() => deleteReport(report)} disabled={saving || running}>Delete</button>
+                      </div>
+                    </div>
+
+                    {isOpen ? (
+                      <div style={{ marginTop: 12, display: "grid", gap: 10 }}>
+                        <div className="mutedSmall">
+                          Full key: <span className="mono">{report.full_key || `${report.slug}.pdf`}</span> • Preview key: <span className="mono">{report.preview_key || `${report.slug}_preview.pdf`}</span>
+                        </div>
+                        {report.keywords?.length ? (
+                          <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                            {report.keywords.map((keyword) => <span key={keyword} className="chipDisabled">{keyword}</span>)}
+                          </div>
+                        ) : null}
+                        <div className="tableWrap">
+                          <table className="table">
+                            <thead>
+                              <tr>
+                                <th>Segment</th>
+                                <th>DynamoDB table</th>
+                                <th>Filter</th>
+                                <th>Columns</th>
+                                <th style={{ width: 90 }}>Rows</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {(report.segments || []).map((segment) => (
+                                <tr key={segment.id || segment.heading}>
+                                  <td>{segment.heading}</td>
+                                  <td className="mono">{segment.source_table || "-"}</td>
+                                  <td className="mono">
+                                    {segment.filter_attribute ? `${segment.filter_attribute} ${segment.filter_operator || "contains"} ${segment.filter_value || ""}` : "No filter"}
+                                  </td>
+                                  <td>{(segment.columns || []).join(", ") || "All columns"}</td>
+                                  <td className="mono">{segment.row_limit || 25}</td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                          <button className="miniBtn" type="button" onClick={() => copyToClipboard(report.slug)}>Copy slug</button>
+                          <button className="miniBtn" type="button" onClick={() => copyToClipboard(JSON.stringify(report.raw || report, null, 2))}>Copy JSON</button>
+                          {report.remarks ? <span className="mutedSmall">Note: {report.remarks}</span> : null}
+                        </div>
+                      </div>
+                    ) : null}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </section>
       </div>
     </div>
   );
