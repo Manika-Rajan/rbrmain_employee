@@ -3180,18 +3180,20 @@ export default function App() {
     }
 
     try {
-      const url = new URL(SALES_API, window.location.origin);
-      url.searchParams.set("limit", "1000");
+      // Keep this as a CORS "simple request". Adding Cache-Control, Pragma,
+      // Authorization, or other non-safelisted headers forces an OPTIONS
+      // preflight, which many API Gateway routes do not currently handle.
+      const cleanSalesApi = String(SALES_API || "")
+        .trim()
+        .replace(/^["']|["']$/g, "");
+      const url = new URL(cleanSalesApi, window.location.origin);
       url.searchParams.set("_ts", String(Date.now()));
 
       const { res, data } = await fetchJson(url.toString(), {
         method: "GET",
         headers: {
           Accept: "application/json",
-          "Cache-Control": "no-cache",
-          Pragma: "no-cache",
         },
-        cache: "no-store",
       });
 
       const parsed = parseJsonRecursively(data?.body ?? data);
@@ -3211,7 +3213,12 @@ export default function App() {
     } catch (e) {
       setSalesItems([]);
       setSalesMeta({ total: 0, source: "" });
-      setSalesError(e?.message || "Failed to load sales");
+      const message = e?.message || "Failed to load sales";
+      setSalesError(
+        message === "Failed to fetch"
+          ? `Browser could not reach the Sales API. Check the VITE_SALES_API URL and the API Gateway GET/CORS configuration. Endpoint: ${String(SALES_API || "").trim()}`
+          : message
+      );
     } finally {
       setSalesLoading(false);
     }
@@ -7463,7 +7470,9 @@ function SalesPanel({
           <div className="emptyIcon">🧾</div>
           <div className="emptyTitle">No sales found</div>
           <div className="mutedSmall">
-            Add VITE_SALES_API or clear the search filter to view purchase records.
+            {salesError
+              ? "The Sales API request failed. Resolve the error shown above, then refresh sales."
+              : "No purchase records were returned. Clear the search filter or refresh sales."}
           </div>
         </div>
       ) : null}
