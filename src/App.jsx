@@ -496,21 +496,74 @@ function groupHistoryByDate(items) {
   }));
 }
 
+function unwrapDynamoValue(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return value;
+  if (Object.prototype.hasOwnProperty.call(value, "S")) return value.S;
+  if (Object.prototype.hasOwnProperty.call(value, "N")) return Number(value.N);
+  if (Object.prototype.hasOwnProperty.call(value, "BOOL")) return Boolean(value.BOOL);
+  if (Object.prototype.hasOwnProperty.call(value, "NULL")) return null;
+  if (Array.isArray(value.L)) return value.L.map(unwrapDynamoValue);
+  if (value.M && typeof value.M === "object") {
+    return Object.fromEntries(Object.entries(value.M).map(([key, entry]) => [key, unwrapDynamoValue(entry)]));
+  }
+  return value;
+}
+
+function parseJsonRecursively(value, maxDepth = 3) {
+  let current = value;
+  for (let depth = 0; depth < maxDepth; depth += 1) {
+    if (typeof current !== "string") break;
+    const trimmed = current.trim();
+    if (!trimmed || !["{", "["].includes(trimmed[0])) break;
+    try {
+      current = JSON.parse(trimmed);
+    } catch {
+      break;
+    }
+  }
+  return current;
+}
+
+function normalizeSaleDateValue(value) {
+  const raw = unwrapDynamoValue(value);
+  if (raw === undefined || raw === null || raw === "") return "";
+
+  const numeric = typeof raw === "number" ? raw : /^\d{10,13}$/.test(String(raw).trim()) ? Number(raw) : NaN;
+  if (Number.isFinite(numeric)) {
+    const milliseconds = numeric < 100000000000 ? numeric * 1000 : numeric;
+    const d = new Date(milliseconds);
+    return Number.isNaN(d.getTime()) ? String(raw) : d.toISOString();
+  }
+
+  return String(raw);
+}
+
 function getSaleDateValue(item = {}) {
-  return (
+  const payment = unwrapDynamoValue(item?.payment) || {};
+  return normalizeSaleDateValue(
     item.saleDate ||
-    item.sale_date ||
-    item.paymentDate ||
-    item.payment_date ||
-    item.paidAt ||
-    item.paid_at ||
-    item.createdAt ||
-    item.created_at ||
-    item.updatedAt ||
-    item.updated_at ||
-    item.timestamp ||
-    item.date ||
-    ""
+      item.sale_date ||
+      item.purchaseDate ||
+      item.purchase_date ||
+      item.purchasedOn ||
+      item.purchased_on ||
+      item.paymentDate ||
+      item.payment_date ||
+      item.transactionDate ||
+      item.transaction_date ||
+      item.paidAt ||
+      item.paid_at ||
+      item.capturedAt ||
+      item.captured_at ||
+      payment.createdAt ||
+      payment.created_at ||
+      item.createdAt ||
+      item.created_at ||
+      item.updatedAt ||
+      item.updated_at ||
+      item.timestamp ||
+      item.date ||
+      ""
   );
 }
 
@@ -547,58 +600,134 @@ function formatInr(value) {
 }
 
 function normalizeSalesPayload(payload) {
-  const parsed = payload && typeof payload.body === "string" ? JSON.parse(payload.body) : payload;
-  const rawItems = Array.isArray(parsed)
-    ? parsed
-    : Array.isArray(parsed?.items)
-    ? parsed.items
-    : Array.isArray(parsed?.sales)
-    ? parsed.sales
-    : Array.isArray(parsed?.results)
-    ? parsed.results
-    : Array.isArray(parsed?.data)
-    ? parsed.data
-    : [];
+  const envelope = parseJsonRecursively(payload);
+  const parsed = parseJsonRecursively(envelope?.body ?? envelope);
 
-  return rawItems.map((item, index) => {
-    const saleDate = getSaleDateValue(item);
-    const amount = toAmountNumber(
-      item?.amount ||
-        item?.paidAmount ||
-        item?.paid_amount ||
-        item?.price ||
-        item?.total ||
-        item?.orderAmount ||
-        item?.order_amount ||
-        item?.paymentAmount ||
-        item?.payment_amount
+  const candidateArrays = [
+    parsed,
+    parsed?.items,
+    parsed?.Items,
+    parsed?.sales,
+    parsed?.payments,
+    parsed?.transactions,
+    parsed?.purchases,
+    parsed?.records,
+    parsed?.results,
+    parsed?.data,
+    parsed?.users,
+    parsed?.userProfiles,
+    parsed?.user_profiles,
+  ];
+
+  const sourceRows = candidateArrays.find(Array.isArray) || [];
+  const rawItems = [];
+
+  sourceRows.forEach((sourceRow) => {
+    const user = unwrapDynamoValue(sourceRow) || {};
+    const reportsValue = unwrapDynamoValue(
+      user.reports || user.purchases || user.orders || user.sales || user.transactions
     );
+
+    if (Array.isArray(reportsValue) && reportsValue.length) {
+      reportsValue.forEach((report, reportIndex) => {
+        const normalizedReport = unwrapDynamoValue(report) || {};
+        rawItems.push({
+          ...user,
+          ...normalizedReport,
+          __user: user,
+          __nestedIndex: reportIndex,
+        });
+      });
+    } else {
+      rawItems.push(user);
+    }
+  });
+
+  const normalized = rawItems.map((rawItem, index) => {
+    const item = unwrapDynamoValue(rawItem) || {};
+    const user = unwrapDynamoValue(item.__user) || {};
+    const payment = unwrapDynamoValue(item.payment) || {};
+    const saleDate = getSaleDateValue({
+      ...user,
+      ...item,
+      purchased_on: item.purchased_on || user.purchased_on,
+      purchasedOn: item.purchasedOn || user.purchasedOn,
+    });
+
+    const amount = toAmountNumber(
+      item?.amount ??
+        item?.saleAmount ??
+        item?.sale_amount ??
+        item?.paidAmount ??
+        item?.paid_amount ??
+        item?.amountPaid ??
+        item?.amount_paid ??
+        item?.pricePaid ??
+        item?.price_paid ??
+        item?.finalAmount ??
+        item?.final_amount ??
+        item?.price ??
+        item?.total ??
+        item?.orderAmount ??
+        item?.order_amount ??
+        item?.paymentAmount ??
+        item?.payment_amount ??
+        payment?.amount ??
+        0
+    );
+
+    const paymentId =
+      item?.paymentId ||
+      item?.payment_id ||
+      item?.razorpay_payment_id ||
+      payment?.id ||
+      payment?.payment_id ||
+      "";
+    const orderId =
+      item?.orderId ||
+      item?.order_id ||
+      item?.razorpay_order_id ||
+      payment?.order_id ||
+      "";
+    const reportId =
+      item?.reportId ||
+      item?.report_id ||
+      item?.slug ||
+      item?.reportSlug ||
+      item?.report_slug ||
+      "";
+    const mobile =
+      item?.mobile ||
+      item?.phone ||
+      item?.userPhone ||
+      item?.user_phone ||
+      item?.customerPhone ||
+      item?.customer_phone ||
+      user?.mobile ||
+      user?.phone ||
+      user?.userId ||
+      user?.user_id ||
+      "";
 
     return {
       id:
         item?.id ||
-        item?.paymentId ||
-        item?.payment_id ||
-        item?.orderId ||
-        item?.order_id ||
-        item?.reportId ||
+        paymentId ||
+        orderId ||
+        [mobile, reportId, saleDate, item.__nestedIndex ?? index].filter((x) => x !== "").join("|") ||
         `sale-${index}`,
       saleDate,
       dateKey: getDateKey(saleDate),
-      mobile:
-        item?.mobile ||
-        item?.phone ||
-        item?.userPhone ||
-        item?.user_phone ||
-        item?.customerPhone ||
-        item?.customer_phone ||
-        "",
+      mobile,
       name:
         item?.name ||
         item?.customerName ||
         item?.customer_name ||
         item?.userName ||
         item?.user_name ||
+        user?.name ||
+        user?.customerName ||
+        user?.customer_name ||
         "",
       reportTitle:
         item?.reportTitle ||
@@ -607,17 +736,40 @@ function normalizeSalesPayload(payload) {
         item?.report_name ||
         item?.title ||
         item?.topic ||
+        item?.name_of_report ||
         "Untitled report",
-      reportId: item?.reportId || item?.report_id || item?.slug || item?.reportSlug || "",
-      reportType: item?.reportType || item?.report_type || item?.type || item?.productType || "",
+      reportId,
+      reportType:
+        item?.reportType ||
+        item?.report_type ||
+        item?.type ||
+        item?.productType ||
+        item?.product_type ||
+        "",
       amount,
-      status: item?.status || item?.paymentStatus || item?.payment_status || "paid",
-      paymentId: item?.paymentId || item?.payment_id || item?.razorpay_payment_id || "",
-      orderId: item?.orderId || item?.order_id || item?.razorpay_order_id || "",
+      status:
+        item?.status ||
+        item?.paymentStatus ||
+        item?.payment_status ||
+        payment?.status ||
+        "paid",
+      paymentId,
+      orderId,
       raw: item,
     };
   });
+
+  const seen = new Set();
+  return normalized.filter((sale) => {
+    const key =
+      sale.paymentId ||
+      [sale.orderId, sale.reportId, sale.mobile, sale.saleDate, sale.amount].map((x) => String(x || "")).join("|");
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 }
+
 
 function getAdsDateValue(item = {}) {
   return (
@@ -1678,6 +1830,8 @@ export default function App() {
         sale.paymentId,
         sale.orderId,
         sale.status,
+        sale.saleDate,
+        sale.amount,
       ]
         .map(normalize)
         .some((value) => value.includes(q))
@@ -3026,20 +3180,33 @@ export default function App() {
     }
 
     try {
-      const { res, data } = await fetchJson(SALES_API, {
+      const url = new URL(SALES_API, window.location.origin);
+      url.searchParams.set("limit", "1000");
+      url.searchParams.set("_ts", String(Date.now()));
+
+      const { res, data } = await fetchJson(url.toString(), {
         method: "GET",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          Accept: "application/json",
+          "Cache-Control": "no-cache",
+          Pragma: "no-cache",
+        },
+        cache: "no-store",
       });
 
-      if (!res.ok || data?.ok === false) {
-        throw new Error(buildErrorMessage(res, data, "Sales API failed"));
+      const parsed = parseJsonRecursively(data?.body ?? data);
+      setLastApiResponse(parsed);
+
+      if (!res.ok || data?.ok === false || parsed?.ok === false) {
+        throw new Error(buildErrorMessage(res, parsed || data, "Sales API failed"));
       }
 
       const items = normalizeSalesPayload(data);
       setSalesItems(items);
       setSalesMeta({
-        total: Number(data?.total || data?.count || items.length || 0),
-        source: data?.source || "sales_api",
+        total: Number(parsed?.total || parsed?.count || items.length || 0),
+        source: parsed?.source || data?.source || "sales_api",
+        fetchedAt: new Date().toISOString(),
       });
     } catch (e) {
       setSalesItems([]);
@@ -5205,6 +5372,7 @@ export default function App() {
               <SalesPanel
                 groupedSales={groupedSales}
                 salesItems={filteredSalesItems}
+                allSalesCount={salesItems.length}
                 salesTotalAmount={salesTotalAmount}
                 salesLoading={salesLoading}
                 salesError={salesError}
@@ -5216,6 +5384,7 @@ export default function App() {
                 toggleSaleMonth={toggleSaleMonth}
                 toggleSaleDate={toggleSaleDate}
                 salesMeta={salesMeta}
+                rawSalesResponse={lastApiResponse}
                 copyToClipboard={copyToClipboard}
               />
             ) : isCatalog ? (
@@ -7172,6 +7341,7 @@ function WebsiteSearchesPanel({
 function SalesPanel({
   groupedSales,
   salesItems,
+  allSalesCount,
   salesTotalAmount,
   salesLoading,
   salesError,
@@ -7183,8 +7353,13 @@ function SalesPanel({
   toggleSaleMonth,
   toggleSaleDate,
   salesMeta,
+  rawSalesResponse,
   copyToClipboard,
 }) {
+  const unknownDateCount = salesItems.filter((sale) => sale.dateKey === "unknown-date").length;
+  const reportedTotal = Number(salesMeta?.total || 0);
+  const paginationGap = Math.max(0, reportedTotal - Number(allSalesCount || 0));
+
   return (
     <div className="card glass" style={{ border: "1px solid rgba(245,158,11,0.28)", background: "rgba(20,14,6,0.42)" }}>
       <div className="cardTitleRow">
@@ -7218,6 +7393,14 @@ function SalesPanel({
         <div className="card" style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.10)" }}>
           <div className="mutedSmall">API source</div>
           <div className="mono" style={{ fontSize: 14, marginTop: 8 }}>{salesMeta?.source || "-"}</div>
+          <div className="mutedSmall" style={{ marginTop: 5 }}>
+            API reported {reportedTotal || allSalesCount || 0} record{(reportedTotal || allSalesCount || 0) === 1 ? "" : "s"}
+          </div>
+          {salesMeta?.fetchedAt ? (
+            <div className="mutedSmall" style={{ marginTop: 5 }}>
+              Refreshed {new Date(salesMeta.fetchedAt).toLocaleString("en-IN")}
+            </div>
+          ) : null}
         </div>
       </div>
 
@@ -7234,6 +7417,38 @@ function SalesPanel({
       </div>
 
       {salesError ? <div className="errorBox">Error: {salesError}</div> : null}
+
+      {paginationGap > 0 ? (
+        <div className="errorBox" style={{ marginTop: 12 }}>
+          The API reports {reportedTotal} sales but returned only {allSalesCount}. The missing {paginationGap} record
+          {paginationGap === 1 ? " is" : "s are"} probably behind backend pagination.
+        </div>
+      ) : null}
+
+      {unknownDateCount > 0 ? (
+        <div className="errorBox" style={{ marginTop: 12 }}>
+          {unknownDateCount} displayed sale{unknownDateCount === 1 ? " has" : "s have"} no recognised purchase date.
+          Check the “Unknown month” group or inspect the raw API response below.
+        </div>
+      ) : null}
+
+      {rawSalesResponse ? (
+        <details style={{ marginTop: 12 }}>
+          <summary style={{ cursor: "pointer", fontWeight: 700 }}>Raw Sales API response (diagnostic)</summary>
+          <div className="rowActions" style={{ marginTop: 10 }}>
+            <button
+              className="miniBtn"
+              type="button"
+              onClick={() => copyToClipboard(JSON.stringify(rawSalesResponse, null, 2))}
+            >
+              Copy raw response
+            </button>
+          </div>
+          <pre className="debugPre" style={{ marginTop: 10, maxHeight: 360, overflow: "auto" }}>
+            {JSON.stringify(rawSalesResponse, null, 2)}
+          </pre>
+        </details>
+      ) : null}
 
       {salesLoading && !salesItems.length ? (
         <div className="empty fancyEmpty" style={{ marginTop: 12 }}>
