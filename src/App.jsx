@@ -1231,6 +1231,93 @@ function summarizeGoogleAdsHierarchy(campaigns = []) {
 }
 
 
+function filterGoogleAdsEnabledHierarchy(campaigns = [], filters = {}) {
+  const enabledCampaignsOnly = Boolean(filters.campaigns);
+  const enabledAdGroupsOnly = Boolean(filters.adGroups);
+  const enabledKeywordsOnly = Boolean(filters.keywords);
+
+  return (campaigns || [])
+    .map((campaign) => {
+      if (
+        enabledCampaignsOnly &&
+        normalizeGoogleAdsEntityStatus(campaign.status) !== "ENABLED"
+      ) {
+        return null;
+      }
+
+      const adGroups = (campaign.adGroups || [])
+        .map((adGroup) => {
+          if (
+            enabledAdGroupsOnly &&
+            normalizeGoogleAdsEntityStatus(adGroup.status) !== "ENABLED"
+          ) {
+            return null;
+          }
+
+          const keywords = (adGroup.keywords || []).filter((keyword) => {
+            if (!enabledKeywordsOnly) return true;
+            return normalizeGoogleAdsEntityStatus(keyword.status) === "ENABLED";
+          });
+
+          // When filtering to enabled keywords, hide ad groups that no longer
+          // contain any visible keywords and recalculate their visible metrics.
+          if (enabledKeywordsOnly && !keywords.length) return null;
+
+          if (enabledKeywordsOnly) {
+            const totals = sumGoogleAdsKeywordMetrics(keywords);
+            return {
+              ...adGroup,
+              keywords,
+              impressions: totals.impressions,
+              clicks: totals.clicks,
+              cost: totals.cost,
+              conversions: totals.conversions,
+            };
+          }
+
+          return {
+            ...adGroup,
+            keywords,
+          };
+        })
+        .filter(Boolean);
+
+      // If a child-level filter is active, do not keep an empty campaign shell.
+      if ((enabledAdGroupsOnly || enabledKeywordsOnly) && !adGroups.length) {
+        return null;
+      }
+
+      if (enabledAdGroupsOnly || enabledKeywordsOnly) {
+        const totals = adGroups.reduce(
+          (acc, group) => {
+            acc.impressions += Number(group.impressions || 0);
+            acc.clicks += Number(group.clicks || 0);
+            acc.cost += toAmountNumber(group.cost);
+            acc.conversions += Number(group.conversions || 0);
+            return acc;
+          },
+          { impressions: 0, clicks: 0, cost: 0, conversions: 0 }
+        );
+
+        return {
+          ...campaign,
+          adGroups,
+          impressions: totals.impressions,
+          clicks: totals.clicks,
+          cost: totals.cost,
+          conversions: totals.conversions,
+        };
+      }
+
+      return {
+        ...campaign,
+        adGroups,
+      };
+    })
+    .filter(Boolean);
+}
+
+
 function normalizeWebsiteSearchPayload(payload, key = "website_searches") {
   const parsed = payload && typeof payload.body === "string" ? JSON.parse(payload.body) : payload;
   const rawItems = Array.isArray(parsed?.[key])
@@ -7042,6 +7129,42 @@ function GoogleAdsManagerPanel({
   toggleCampaign,
   toggleAdGroup,
 }) {
+  const [enabledOnlyFilters, setEnabledOnlyFilters] = useState({
+    campaigns: false,
+    adGroups: false,
+    keywords: false,
+  });
+
+  const visibleCampaigns = useMemo(
+    () => filterGoogleAdsEnabledHierarchy(campaigns, enabledOnlyFilters),
+    [campaigns, enabledOnlyFilters]
+  );
+
+  const visibleSummary = useMemo(
+    () => summarizeGoogleAdsHierarchy(visibleCampaigns),
+    [visibleCampaigns]
+  );
+
+  const anyEnabledOnlyFilter =
+    enabledOnlyFilters.campaigns ||
+    enabledOnlyFilters.adGroups ||
+    enabledOnlyFilters.keywords;
+
+  function toggleEnabledOnlyFilter(key) {
+    setEnabledOnlyFilters((prev) => ({
+      ...prev,
+      [key]: !prev[key],
+    }));
+  }
+
+  function clearEnabledOnlyFilters() {
+    setEnabledOnlyFilters({
+      campaigns: false,
+      adGroups: false,
+      keywords: false,
+    });
+  }
+
   function statusBadge(status) {
     const normalized = normalizeGoogleAdsEntityStatus(status);
     const style =
@@ -7147,13 +7270,13 @@ function GoogleAdsManagerPanel({
         }}
       >
         {[
-          ["Campaigns", summary.campaigns],
-          ["Ad groups", summary.adGroups],
-          ["Keywords", summary.keywords],
-          ["Impressions", formatNumberCompact(summary.impressions)],
-          ["Clicks", formatNumberCompact(summary.clicks)],
-          ["Cost", formatInr(summary.cost)],
-          ["Conversions", formatNumberCompact(summary.conversions)],
+          ["Campaigns", visibleSummary.campaigns],
+          ["Ad groups", visibleSummary.adGroups],
+          ["Keywords", visibleSummary.keywords],
+          ["Impressions", formatNumberCompact(visibleSummary.impressions)],
+          ["Clicks", formatNumberCompact(visibleSummary.clicks)],
+          ["Cost", formatInr(visibleSummary.cost)],
+          ["Conversions", formatNumberCompact(visibleSummary.conversions)],
         ].map(([label, value]) => (
           <div
             key={label}
@@ -7225,27 +7348,99 @@ function GoogleAdsManagerPanel({
         <div className="mutedSmall" style={{ marginTop: 8 }}>
           Change the dates, then click “Refresh Google Ads” to reload cost/click metrics for that range.
         </div>
+
+        <div
+          style={{
+            marginTop: 12,
+            paddingTop: 12,
+            borderTop: "1px solid rgba(255,255,255,0.10)",
+            display: "flex",
+            alignItems: "center",
+            gap: 8,
+            flexWrap: "wrap",
+          }}
+        >
+          <div className="mutedSmall" style={{ marginRight: 4, fontWeight: 800 }}>
+            Show only:
+          </div>
+
+          {[
+            ["campaigns", "Enabled campaigns"],
+            ["adGroups", "Enabled ad groups"],
+            ["keywords", "Enabled keywords"],
+          ].map(([key, label]) => {
+            const checked = Boolean(enabledOnlyFilters[key]);
+            return (
+              <label
+                key={key}
+                className="chipPill"
+                style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: 7,
+                  cursor: "pointer",
+                  border: checked
+                    ? "1px solid rgba(34,197,94,0.46)"
+                    : "1px solid rgba(255,255,255,0.12)",
+                  background: checked
+                    ? "rgba(34,197,94,0.14)"
+                    : "rgba(255,255,255,0.04)",
+                  color: checked
+                    ? "rgba(220,252,231,0.98)"
+                    : "rgba(255,255,255,0.78)",
+                  userSelect: "none",
+                }}
+                title={`Show only ${label.toLowerCase()}`}
+              >
+                <input
+                  type="checkbox"
+                  checked={checked}
+                  onChange={() => toggleEnabledOnlyFilter(key)}
+                  style={{ margin: 0 }}
+                />
+                {label}
+              </label>
+            );
+          })}
+
+          {anyEnabledOnlyFilter ? (
+            <button
+              className="linkBtn"
+              type="button"
+              onClick={clearEnabledOnlyFilters}
+              style={{ marginLeft: 4 }}
+            >
+              Clear status filters
+            </button>
+          ) : null}
+
+          <div className="mutedSmall" style={{ marginLeft: "auto" }}>
+            Filters can be combined.
+          </div>
+        </div>
       </div>
 
       {error ? <div className="errorBox" style={{ marginTop: 12 }}>Error: {error}</div> : null}
 
-      {loading && !campaigns.length ? (
+      {loading && !visibleCampaigns.length ? (
         <div className="empty fancyEmpty" style={{ marginTop: 12 }}>
           <div className="emptyIcon">📣</div>
           <div className="emptyTitle">Loading Google Ads structure…</div>
         </div>
       ) : null}
 
-      {!loading && !campaigns.length && !error ? (
+      {!loading && !visibleCampaigns.length && !error ? (
         <div className="empty fancyEmpty" style={{ marginTop: 12 }}>
           <div className="emptyIcon">🔎</div>
           <div className="emptyTitle">No campaigns found</div>
-          <div className="mutedSmall">Try clearing the search or refreshing the view.</div>
+          <div className="mutedSmall">
+            Try clearing the search or status filters, or refresh the view.
+          </div>
         </div>
       ) : null}
 
       <div style={{ display: "grid", gap: 12, marginTop: 14 }}>
-        {(campaigns || []).map((campaign) => {
+        {(visibleCampaigns || []).map((campaign) => {
           const campaignOpen =
             expandedCampaigns[campaign.id] !== undefined
               ? expandedCampaigns[campaign.id]
