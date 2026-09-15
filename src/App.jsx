@@ -909,6 +909,328 @@ function normalizeAdsIntelligencePayload(payload) {
 }
 
 
+function normalizeGoogleAdsEntityStatus(value) {
+  const raw = String(value || "").trim().toUpperCase();
+  if (["ENABLED", "ACTIVE"].includes(raw)) return "ENABLED";
+  if (["PAUSED", "PAUSE"].includes(raw)) return "PAUSED";
+  if (["REMOVED", "DELETED"].includes(raw)) return "REMOVED";
+  return raw || "UNKNOWN";
+}
+
+function normalizeGoogleAdsMatchType(value) {
+  const raw = String(value || "").trim().toUpperCase();
+  if (!raw) return "";
+  return raw.replace(/_/g, " ");
+}
+
+function googleAdsMetricNumber(obj = {}, keys = []) {
+  return Number(firstNonEmptyFromObject(obj, keys) || 0) || 0;
+}
+
+function googleAdsMetricCost(obj = {}) {
+  const direct = firstNonEmptyFromObject(obj, [
+    "cost",
+    "spend",
+    "costInr",
+    "cost_inr",
+    "amountSpent",
+    "amount_spent",
+  ]);
+  if (direct !== "") return toAmountNumber(direct);
+
+  const micros = firstNonEmptyFromObject(obj, [
+    "costMicros",
+    "cost_micros",
+    "metrics.cost_micros",
+  ]);
+  if (micros !== "") return (Number(micros) || 0) / 1000000;
+
+  return 0;
+}
+
+function sumGoogleAdsKeywordMetrics(keywords = []) {
+  return keywords.reduce(
+    (acc, keyword) => {
+      acc.impressions += Number(keyword.impressions || 0);
+      acc.clicks += Number(keyword.clicks || 0);
+      acc.cost += toAmountNumber(keyword.cost);
+      acc.conversions += Number(keyword.conversions || 0);
+      return acc;
+    },
+    { impressions: 0, clicks: 0, cost: 0, conversions: 0 }
+  );
+}
+
+function normalizeGoogleAdsManagerPayload(payload) {
+  const parsed = unwrapApiPayload(payload);
+  const rawCampaigns = Array.isArray(parsed?.campaigns) ? parsed.campaigns : [];
+
+  // Preferred response shape from the dedicated Google Ads Structure API.
+  if (rawCampaigns.length) {
+    const campaigns = rawCampaigns.map((campaign, campaignIndex) => {
+      const rawAdGroups = Array.isArray(campaign?.adGroups)
+        ? campaign.adGroups
+        : Array.isArray(campaign?.ad_groups)
+        ? campaign.ad_groups
+        : [];
+
+      const adGroups = rawAdGroups.map((adGroup, adGroupIndex) => {
+        const rawKeywords = Array.isArray(adGroup?.keywords) ? adGroup.keywords : [];
+
+        const keywords = rawKeywords.map((keyword, keywordIndex) => ({
+          id:
+            keyword?.keywordId ||
+            keyword?.keyword_id ||
+            keyword?.criterionId ||
+            keyword?.criterion_id ||
+            `${campaignIndex}-${adGroupIndex}-${keywordIndex}`,
+          text:
+            keyword?.text ||
+            keyword?.keyword ||
+            keyword?.keywordText ||
+            keyword?.keyword_text ||
+            "-",
+          matchType: normalizeGoogleAdsMatchType(
+            keyword?.matchType || keyword?.match_type || keyword?.keywordMatchType || keyword?.keyword_match_type
+          ),
+          status: normalizeGoogleAdsEntityStatus(
+            keyword?.status || keyword?.keywordStatus || keyword?.keyword_status
+          ),
+          impressions: googleAdsMetricNumber(keyword, ["impressions", "impression_count", "impressionCount"]),
+          clicks: googleAdsMetricNumber(keyword, ["clicks", "click_count", "clickCount"]),
+          cost: googleAdsMetricCost(keyword),
+          conversions: googleAdsMetricNumber(keyword, ["conversions", "conversion_count", "conversionCount"]),
+          raw: keyword,
+        }));
+
+        const derived = sumGoogleAdsKeywordMetrics(keywords);
+        return {
+          id: adGroup?.adGroupId || adGroup?.ad_group_id || adGroup?.id || `${campaignIndex}-${adGroupIndex}`,
+          name: adGroup?.adGroupName || adGroup?.ad_group_name || adGroup?.name || "Unnamed ad group",
+          status: normalizeGoogleAdsEntityStatus(
+            adGroup?.status || adGroup?.adGroupStatus || adGroup?.ad_group_status
+          ),
+          impressions:
+            googleAdsMetricNumber(adGroup, ["impressions", "impression_count", "impressionCount"]) || derived.impressions,
+          clicks: googleAdsMetricNumber(adGroup, ["clicks", "click_count", "clickCount"]) || derived.clicks,
+          cost: googleAdsMetricCost(adGroup) || derived.cost,
+          conversions:
+            googleAdsMetricNumber(adGroup, ["conversions", "conversion_count", "conversionCount"]) || derived.conversions,
+          keywords,
+          raw: adGroup,
+        };
+      });
+
+      const derivedCampaign = adGroups.reduce(
+        (acc, group) => {
+          acc.impressions += Number(group.impressions || 0);
+          acc.clicks += Number(group.clicks || 0);
+          acc.cost += toAmountNumber(group.cost);
+          acc.conversions += Number(group.conversions || 0);
+          return acc;
+        },
+        { impressions: 0, clicks: 0, cost: 0, conversions: 0 }
+      );
+
+      return {
+        id: campaign?.campaignId || campaign?.campaign_id || campaign?.id || `campaign-${campaignIndex}`,
+        name: campaign?.campaignName || campaign?.campaign_name || campaign?.name || "Unnamed campaign",
+        status: normalizeGoogleAdsEntityStatus(
+          campaign?.status || campaign?.campaignStatus || campaign?.campaign_status
+        ),
+        impressions:
+          googleAdsMetricNumber(campaign, ["impressions", "impression_count", "impressionCount"]) ||
+          derivedCampaign.impressions,
+        clicks:
+          googleAdsMetricNumber(campaign, ["clicks", "click_count", "clickCount"]) || derivedCampaign.clicks,
+        cost: googleAdsMetricCost(campaign) || derivedCampaign.cost,
+        conversions:
+          googleAdsMetricNumber(campaign, ["conversions", "conversion_count", "conversionCount"]) ||
+          derivedCampaign.conversions,
+        adGroups,
+        raw: campaign,
+      };
+    });
+
+    return {
+      campaigns,
+      dateRange: parsed?.dateRange || parsed?.date_range || null,
+      lastUpdatedAt:
+        parsed?.lastUpdatedAt ||
+        parsed?.last_updated_at ||
+        parsed?.generatedAt ||
+        parsed?.generated_at ||
+        "",
+      source: parsed?.source || "google_ads_structure_api",
+    };
+  }
+
+  // Fallback: accept a flat keyword-view payload and build the hierarchy in the browser.
+  const flatRows = Array.isArray(parsed)
+    ? parsed
+    : Array.isArray(parsed?.items)
+    ? parsed.items
+    : Array.isArray(parsed?.rows)
+    ? parsed.rows
+    : Array.isArray(parsed?.data)
+    ? parsed.data
+    : [];
+
+  const campaignMap = new Map();
+
+  flatRows.forEach((row, index) => {
+    const campaignId = String(
+      pickLoose(row.campaignId, row.campaign_id, row.campaign?.id, row.campaignName, row.campaign_name, row.campaign, `campaign-${index}`)
+    );
+    const campaignName = pickLoose(
+      row.campaignName,
+      row.campaign_name,
+      row.campaign?.name,
+      typeof row.campaign === "string" ? row.campaign : "",
+      "Unnamed campaign"
+    );
+
+    if (!campaignMap.has(campaignId)) {
+      campaignMap.set(campaignId, {
+        id: campaignId,
+        name: campaignName,
+        status: normalizeGoogleAdsEntityStatus(
+          pickLoose(row.campaignStatus, row.campaign_status, row.campaign?.status, "")
+        ),
+        adGroupsMap: new Map(),
+      });
+    }
+
+    const campaign = campaignMap.get(campaignId);
+    const adGroupId = String(
+      pickLoose(row.adGroupId, row.ad_group_id, row.adGroup?.id, row.adGroupName, row.ad_group_name, row.adGroup, `adgroup-${index}`)
+    );
+    const adGroupName = pickLoose(
+      row.adGroupName,
+      row.ad_group_name,
+      row.adGroup?.name,
+      typeof row.adGroup === "string" ? row.adGroup : "",
+      "Unnamed ad group"
+    );
+
+    if (!campaign.adGroupsMap.has(adGroupId)) {
+      campaign.adGroupsMap.set(adGroupId, {
+        id: adGroupId,
+        name: adGroupName,
+        status: normalizeGoogleAdsEntityStatus(
+          pickLoose(row.adGroupStatus, row.ad_group_status, row.adGroup?.status, "")
+        ),
+        keywords: [],
+      });
+    }
+
+    const adGroup = campaign.adGroupsMap.get(adGroupId);
+    adGroup.keywords.push({
+      id: pickLoose(row.keywordId, row.keyword_id, row.criterionId, row.criterion_id, `keyword-${index}`),
+      text: pickLoose(row.keywordText, row.keyword_text, row.keyword, row.adKeyword, "-"),
+      matchType: normalizeGoogleAdsMatchType(
+        pickLoose(row.matchType, row.match_type, row.keywordMatchType, row.keyword_match_type, "")
+      ),
+      status: normalizeGoogleAdsEntityStatus(
+        pickLoose(row.keywordStatus, row.keyword_status, row.status, "")
+      ),
+      impressions: googleAdsMetricNumber(row, ["impressions", "impression_count", "impressionCount"]),
+      clicks: googleAdsMetricNumber(row, ["clicks", "click_count", "clickCount"]),
+      cost: googleAdsMetricCost(row),
+      conversions: googleAdsMetricNumber(row, ["conversions", "conversion_count", "conversionCount"]),
+      raw: row,
+    });
+  });
+
+  const campaigns = Array.from(campaignMap.values()).map((campaign) => {
+    const adGroups = Array.from(campaign.adGroupsMap.values()).map((adGroup) => {
+      const totals = sumGoogleAdsKeywordMetrics(adGroup.keywords);
+      return { ...adGroup, ...totals };
+    });
+
+    const totals = adGroups.reduce(
+      (acc, group) => {
+        acc.impressions += Number(group.impressions || 0);
+        acc.clicks += Number(group.clicks || 0);
+        acc.cost += toAmountNumber(group.cost);
+        acc.conversions += Number(group.conversions || 0);
+        return acc;
+      },
+      { impressions: 0, clicks: 0, cost: 0, conversions: 0 }
+    );
+
+    return {
+      id: campaign.id,
+      name: campaign.name,
+      status: campaign.status,
+      adGroups,
+      ...totals,
+    };
+  });
+
+  return {
+    campaigns,
+    dateRange: parsed?.dateRange || parsed?.date_range || null,
+    lastUpdatedAt:
+      parsed?.lastUpdatedAt ||
+      parsed?.last_updated_at ||
+      parsed?.generatedAt ||
+      parsed?.generated_at ||
+      "",
+    source: parsed?.source || "google_ads_structure_api",
+  };
+}
+
+function filterGoogleAdsHierarchy(campaigns = [], query = "") {
+  const q = normalize(query);
+  if (!q) return campaigns;
+
+  return campaigns
+    .map((campaign) => {
+      const campaignMatch = [campaign.name, campaign.status].map(normalize).some((value) => value.includes(q));
+
+      const adGroups = (campaign.adGroups || [])
+        .map((adGroup) => {
+          const adGroupMatch = [adGroup.name, adGroup.status].map(normalize).some((value) => value.includes(q));
+          const keywords = (adGroup.keywords || []).filter((keyword) =>
+            [keyword.text, keyword.matchType, keyword.status]
+              .map(normalize)
+              .some((value) => value.includes(q))
+          );
+
+          if (campaignMatch || adGroupMatch) return adGroup;
+          if (keywords.length) return { ...adGroup, keywords };
+          return null;
+        })
+        .filter(Boolean);
+
+      if (campaignMatch) return campaign;
+      if (adGroups.length) return { ...campaign, adGroups };
+      return null;
+    })
+    .filter(Boolean);
+}
+
+function summarizeGoogleAdsHierarchy(campaigns = []) {
+  return campaigns.reduce(
+    (acc, campaign) => {
+      acc.campaigns += 1;
+      acc.adGroups += (campaign.adGroups || []).length;
+      acc.keywords += (campaign.adGroups || []).reduce(
+        (sum, group) => sum + (group.keywords || []).length,
+        0
+      );
+      acc.impressions += Number(campaign.impressions || 0);
+      acc.clicks += Number(campaign.clicks || 0);
+      acc.cost += toAmountNumber(campaign.cost);
+      acc.conversions += Number(campaign.conversions || 0);
+      return acc;
+    },
+    { campaigns: 0, adGroups: 0, keywords: 0, impressions: 0, clicks: 0, cost: 0, conversions: 0 }
+  );
+}
+
+
 function normalizeWebsiteSearchPayload(payload, key = "website_searches") {
   const parsed = payload && typeof payload.body === "string" ? JSON.parse(payload.body) : payload;
   const rawItems = Array.isArray(parsed?.[key])
@@ -1500,6 +1822,7 @@ export default function App() {
   const SALES_API = import.meta.env.VITE_SALES_API || "";
   const TRAFFIC_INTELLIGENCE_API = import.meta.env.VITE_TRAFFIC_INTELLIGENCE_API || "";
   const GOOGLE_ADS_UPDATE_API = import.meta.env.VITE_GOOGLE_ADS_UPDATE_API || "";
+  const GOOGLE_ADS_STRUCTURE_API = import.meta.env.VITE_GOOGLE_ADS_STRUCTURE_API || "";
   const WEBSITE_SEARCHES_API = import.meta.env.VITE_WEBSITE_SEARCHES_API || TRAFFIC_INTELLIGENCE_API || "";
   const BULK_REPORTS_API = import.meta.env.VITE_BULK_REPORTS_API || "";
   const SUGGEST_API = "https://vtwyu7hv50.execute-api.ap-south-1.amazonaws.com/default/suggest";
@@ -1520,6 +1843,7 @@ export default function App() {
   const isCatalog = activeTab === "catalog";
   const isSales = activeTab === "sales";
   const isTrafficIntelligence = activeTab === "traffic-intelligence";
+  const isGoogleAdsManager = activeTab === "google-ads-manager";
   const isWebsiteSearches = activeTab === "website-searches";
   const isBulkReports = activeTab === "bulk-reports";
   const isInstantAdmin = activeTab === "instant" && instantAdminTab !== "generate";
@@ -1632,6 +1956,21 @@ export default function App() {
   const [adsDeviceFilter, setAdsDeviceFilter] = useState("all");
   const [expandedAdsRows, setExpandedAdsRows] = useState({});
   const [adsMeta, setAdsMeta] = useState({ total: 0, source: "", lastPulledAt: "" });
+  const [googleAdsCampaigns, setGoogleAdsCampaigns] = useState([]);
+  const [googleAdsManagerLoading, setGoogleAdsManagerLoading] = useState(false);
+  const [googleAdsManagerError, setGoogleAdsManagerError] = useState("");
+  const [googleAdsManagerSearch, setGoogleAdsManagerSearch] = useState("");
+  const [googleAdsManagerStartDate, setGoogleAdsManagerStartDate] = useState(() =>
+    getDateKey(new Date(Date.now() - 29 * 24 * 60 * 60 * 1000))
+  );
+  const [googleAdsManagerEndDate, setGoogleAdsManagerEndDate] = useState(() => getDateKey(new Date()));
+  const [googleAdsManagerMeta, setGoogleAdsManagerMeta] = useState({
+    source: "",
+    lastUpdatedAt: "",
+    dateRange: null,
+  });
+  const [expandedGoogleAdsCampaigns, setExpandedGoogleAdsCampaigns] = useState({});
+  const [expandedGoogleAdsAdGroups, setExpandedGoogleAdsAdGroups] = useState({});
   const [searchExplorerItems, setSearchExplorerItems] = useState([]);
   const [searchExplorerColumns, setSearchExplorerColumns] = useState([]);
   const [searchExplorerLoading, setSearchExplorerLoading] = useState(false);
@@ -1771,6 +2110,11 @@ export default function App() {
   useEffect(() => {
     if (activeTab !== "traffic-intelligence") return;
     loadAdsIntelligence();
+  }, [activeTab]);
+
+  useEffect(() => {
+    if (activeTab !== "google-ads-manager") return;
+    loadGoogleAdsManager();
   }, [activeTab]);
 
   useEffect(() => {
@@ -1930,6 +2274,15 @@ export default function App() {
       { clicks: 0, impressions: 0, cost: 0, leads: 0, sales: 0, revenue: 0, websiteSearches: 0 }
     );
   }, [filteredAdsItems]);
+
+
+  const filteredGoogleAdsCampaigns = useMemo(() => {
+    return filterGoogleAdsHierarchy(googleAdsCampaigns, googleAdsManagerSearch);
+  }, [googleAdsCampaigns, googleAdsManagerSearch]);
+
+  const googleAdsManagerSummary = useMemo(() => {
+    return summarizeGoogleAdsHierarchy(filteredGoogleAdsCampaigns);
+  }, [filteredGoogleAdsCampaigns]);
 
   const filteredSearchExplorerItems = useMemo(() => {
     return searchExplorerItems.filter((item) => searchExplorerMatches(item, searchExplorerSearch));
@@ -3288,6 +3641,82 @@ export default function App() {
     }
   }
 
+  async function loadGoogleAdsManager() {
+    setGoogleAdsManagerLoading(true);
+    setGoogleAdsManagerError("");
+
+    if (!GOOGLE_ADS_STRUCTURE_API) {
+      setGoogleAdsCampaigns([]);
+      setGoogleAdsManagerMeta({ source: "", lastUpdatedAt: "", dateRange: null });
+      setGoogleAdsManagerLoading(false);
+      setGoogleAdsManagerError(
+        "Missing env var: VITE_GOOGLE_ADS_STRUCTURE_API. Add the dedicated Google Ads campaign/ad-group/keyword structure endpoint in Amplify env vars and redeploy."
+      );
+      return;
+    }
+
+    try {
+      const cleanApi = String(GOOGLE_ADS_STRUCTURE_API || "")
+        .trim()
+        .replace(/^["']|["']$/g, "");
+      const url = new URL(cleanApi, window.location.origin);
+      url.searchParams.set("_ts", String(Date.now()));
+      if (googleAdsManagerStartDate && googleAdsManagerStartDate !== "unknown-date") {
+        url.searchParams.set("startDate", googleAdsManagerStartDate);
+      }
+      if (googleAdsManagerEndDate && googleAdsManagerEndDate !== "unknown-date") {
+        url.searchParams.set("endDate", googleAdsManagerEndDate);
+      }
+
+      const { res, data } = await fetchJson(url.toString(), {
+        method: "GET",
+        headers: { Accept: "application/json" },
+      });
+
+      if (!res.ok || data?.ok === false) {
+        throw new Error(buildErrorMessage(res, data, "Google Ads Manager API failed"));
+      }
+
+      const normalized = normalizeGoogleAdsManagerPayload(data);
+      setGoogleAdsCampaigns(normalized.campaigns);
+      setGoogleAdsManagerMeta({
+        source: normalized.source,
+        lastUpdatedAt: normalized.lastUpdatedAt,
+        dateRange: normalized.dateRange,
+      });
+
+      // Open enabled campaigns by default on first load.
+      setExpandedGoogleAdsCampaigns((prev) => {
+        if (Object.keys(prev || {}).length) return prev;
+        const next = {};
+        normalized.campaigns.forEach((campaign) => {
+          next[campaign.id] = campaign.status === "ENABLED";
+        });
+        return next;
+      });
+    } catch (e) {
+      setGoogleAdsCampaigns([]);
+      setGoogleAdsManagerMeta({ source: "", lastUpdatedAt: "", dateRange: null });
+      setGoogleAdsManagerError(e?.message || "Failed to load Google Ads campaign structure");
+    } finally {
+      setGoogleAdsManagerLoading(false);
+    }
+  }
+
+  function toggleGoogleAdsCampaign(campaignId) {
+    setExpandedGoogleAdsCampaigns((prev) => ({
+      ...prev,
+      [campaignId]: !prev[campaignId],
+    }));
+  }
+
+  function toggleGoogleAdsAdGroup(adGroupId) {
+    setExpandedGoogleAdsAdGroups((prev) => ({
+      ...prev,
+      [adGroupId]: !prev[adGroupId],
+    }));
+  }
+
   async function loadWebsiteSearches() {
     setSearchExplorerLoading(true);
     setSearchExplorerError("");
@@ -4570,6 +4999,25 @@ export default function App() {
               <button
                 type="button"
                 className="chipPill"
+                onClick={() => setActiveTab("google-ads-manager")}
+                style={{
+                  border:
+                    activeTab === "google-ads-manager"
+                      ? "1px solid rgba(251,191,36,0.52)"
+                      : "1px solid rgba(255,255,255,0.14)",
+                  background:
+                    activeTab === "google-ads-manager" ? "rgba(251,191,36,0.16)" : "rgba(255,255,255,0.08)",
+                  color:
+                    activeTab === "google-ads-manager"
+                      ? "rgba(254,243,199,0.98)"
+                      : "rgba(255,255,255,0.88)",
+                }}
+              >
+                Google Ads Manager
+              </button>
+              <button
+                type="button"
+                className="chipPill"
                 onClick={() => setActiveTab("website-searches")}
                 style={{
                   border:
@@ -5229,8 +5677,8 @@ export default function App() {
           </>
         ) : null}
 
-        <div className={clsx("body", (leftHidden || isPrebook || isCatalog || isSales || isTrafficIntelligence || isWebsiteSearches || isBulkReports || isInstantAdmin) && "bodyFull")}>
-          {!leftHidden && !isPrebook && !isCatalog && !isSales && !isTrafficIntelligence && !isWebsiteSearches && !isBulkReports && !isInstantAdmin ? (
+        <div className={clsx("body", (leftHidden || isPrebook || isCatalog || isSales || isTrafficIntelligence || isGoogleAdsManager || isWebsiteSearches || isBulkReports || isInstantAdmin) && "bodyFull")}>
+          {!leftHidden && !isPrebook && !isCatalog && !isSales && !isTrafficIntelligence && !isGoogleAdsManager && !isWebsiteSearches && !isBulkReports && !isInstantAdmin ? (
             <aside className="left">
               <div className="panelScroll">
                 <div className="card glass">
@@ -5344,6 +5792,25 @@ export default function App() {
                 meta={searchExplorerMeta}
                 loadWebsiteSearches={loadWebsiteSearches}
                 copyToClipboard={copyToClipboard}
+              />
+            ) : isGoogleAdsManager ? (
+              <GoogleAdsManagerPanel
+                campaigns={filteredGoogleAdsCampaigns}
+                summary={googleAdsManagerSummary}
+                loading={googleAdsManagerLoading}
+                error={googleAdsManagerError}
+                search={googleAdsManagerSearch}
+                setSearch={setGoogleAdsManagerSearch}
+                startDate={googleAdsManagerStartDate}
+                setStartDate={setGoogleAdsManagerStartDate}
+                endDate={googleAdsManagerEndDate}
+                setEndDate={setGoogleAdsManagerEndDate}
+                meta={googleAdsManagerMeta}
+                refresh={loadGoogleAdsManager}
+                expandedCampaigns={expandedGoogleAdsCampaigns}
+                expandedAdGroups={expandedGoogleAdsAdGroups}
+                toggleCampaign={toggleGoogleAdsCampaign}
+                toggleAdGroup={toggleGoogleAdsAdGroup}
               />
             ) : isTrafficIntelligence ? (
               <AdsIntelligencePanel
@@ -5500,7 +5967,7 @@ export default function App() {
               </div>
             ) : null}
 
-              {!isPrebook && !isCatalog && !isSales && !isTrafficIntelligence && !isWebsiteSearches && !isBulkReports && !isInstantAdmin ? (
+              {!isPrebook && !isCatalog && !isSales && !isTrafficIntelligence && !isGoogleAdsManager && !isWebsiteSearches && !isBulkReports && !isInstantAdmin ? (
                 <div className="card glass" style={{ marginBottom: 12, width: "100%" }}>
                   <div className="cardTitleRow">
                     <div className="cardTitle">Generated Reports (Instant)</div>
@@ -5543,7 +6010,7 @@ export default function App() {
                 </div>
               ) : null}
 
-            {!isCatalog && !isSales && !isTrafficIntelligence && !isWebsiteSearches && !isInstantAdmin ? (
+            {!isCatalog && !isSales && !isTrafficIntelligence && !isGoogleAdsManager && !isWebsiteSearches && !isInstantAdmin ? (
               <>
                 <div className="compareHeader">
                   <div className="compareTitleRow">
@@ -5570,6 +6037,8 @@ export default function App() {
         <footer className="footer">
           {isSales
             ? "Tip: Expand a month, then expand a sale date to audit each purchase with customer and report details."
+            : isGoogleAdsManager
+            ? "Tip: Expand campaign → ad group → keyword to audit status, match type, clicks, cost, and conversions without searching through Google Ads."
             : isBulkReports
             ? "Tip: Keep enabled reports small enough for one Lambda run, then schedule the same API later if you want automatic refresh."
             : isCatalog
@@ -6553,6 +7022,374 @@ function CatalogSuggestionsPanel({
   );
 }
 
+
+
+function GoogleAdsManagerPanel({
+  campaigns,
+  summary,
+  loading,
+  error,
+  search,
+  setSearch,
+  startDate,
+  setStartDate,
+  endDate,
+  setEndDate,
+  meta,
+  refresh,
+  expandedCampaigns,
+  expandedAdGroups,
+  toggleCampaign,
+  toggleAdGroup,
+}) {
+  function statusBadge(status) {
+    const normalized = normalizeGoogleAdsEntityStatus(status);
+    const style =
+      normalized === "ENABLED"
+        ? {
+            border: "1px solid rgba(34,197,94,0.34)",
+            background: "rgba(34,197,94,0.12)",
+            color: "rgba(220,252,231,0.98)",
+          }
+        : normalized === "PAUSED"
+        ? {
+            border: "1px solid rgba(251,191,36,0.36)",
+            background: "rgba(251,191,36,0.12)",
+            color: "rgba(254,243,199,0.98)",
+          }
+        : normalized === "REMOVED"
+        ? {
+            border: "1px solid rgba(248,113,113,0.34)",
+            background: "rgba(248,113,113,0.10)",
+            color: "rgba(254,226,226,0.98)",
+          }
+        : {
+            border: "1px solid rgba(255,255,255,0.16)",
+            background: "rgba(255,255,255,0.06)",
+            color: "rgba(255,255,255,0.76)",
+          };
+
+    return (
+      <span
+        style={{
+          ...style,
+          display: "inline-flex",
+          alignItems: "center",
+          justifyContent: "center",
+          minWidth: 72,
+          padding: "5px 8px",
+          borderRadius: 999,
+          fontSize: 11,
+          fontWeight: 800,
+          letterSpacing: "0.03em",
+        }}
+      >
+        {normalized}
+      </span>
+    );
+  }
+
+  function ctr(clicks, impressions) {
+    const c = Number(clicks || 0);
+    const i = Number(impressions || 0);
+    if (!i) return "0.00%";
+    return `${((c / i) * 100).toFixed(2)}%`;
+  }
+
+  const lastUpdatedLabel = (() => {
+    if (!meta?.lastUpdatedAt) return "Not available";
+    const d = new Date(meta.lastUpdatedAt);
+    if (Number.isNaN(d.getTime())) return String(meta.lastUpdatedAt);
+    return d.toLocaleString("en-IN", {
+      day: "2-digit",
+      month: "short",
+      year: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: true,
+    });
+  })();
+
+  const dateRangeLabel = (() => {
+    const range = meta?.dateRange;
+    if (!range) return "API-selected range";
+    const start = range.start || range.startDate || range.start_date || "";
+    const end = range.end || range.endDate || range.end_date || "";
+    return [start, end].filter(Boolean).join(" → ") || "API-selected range";
+  })();
+
+  return (
+    <div
+      className="card glass"
+      style={{
+        border: "1px solid rgba(251,191,36,0.28)",
+        background: "rgba(24,18,6,0.42)",
+      }}
+    >
+      <div className="cardTitleRow" style={{ alignItems: "flex-start", gap: 12 }}>
+        <div>
+          <div className="cardTitle">Google Ads Manager</div>
+          <div className="mutedSmall" style={{ marginTop: 4 }}>
+            Campaign → Ad group → Keyword hierarchy with live status and performance metrics.
+          </div>
+        </div>
+        <button className="btnSecondary" type="button" onClick={refresh} disabled={loading}>
+          {loading ? "Refreshing…" : "Refresh Google Ads"}
+        </button>
+      </div>
+
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: "repeat(7, minmax(120px, 1fr))",
+          gap: 10,
+          marginTop: 14,
+        }}
+      >
+        {[
+          ["Campaigns", summary.campaigns],
+          ["Ad groups", summary.adGroups],
+          ["Keywords", summary.keywords],
+          ["Impressions", formatNumberCompact(summary.impressions)],
+          ["Clicks", formatNumberCompact(summary.clicks)],
+          ["Cost", formatInr(summary.cost)],
+          ["Conversions", formatNumberCompact(summary.conversions)],
+        ].map(([label, value]) => (
+          <div
+            key={label}
+            className="card"
+            style={{
+              background: "rgba(255,255,255,0.04)",
+              border: "1px solid rgba(255,255,255,0.10)",
+              padding: 12,
+            }}
+          >
+            <div className="mutedSmall">{label}</div>
+            <div className="mono" style={{ fontSize: 18, marginTop: 5 }}>{value}</div>
+          </div>
+        ))}
+      </div>
+
+      <div
+        className="card"
+        style={{
+          marginTop: 12,
+          background: "rgba(255,255,255,0.035)",
+          border: "1px solid rgba(255,255,255,0.10)",
+        }}
+      >
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "145px 145px 1fr 1fr 1.5fr",
+            gap: 12,
+            alignItems: "end",
+          }}
+        >
+          <div>
+            <label className="label">Start date</label>
+            <input
+              className="input inputSm"
+              type="date"
+              value={startDate || ""}
+              onChange={(e) => setStartDate(e.target.value)}
+            />
+          </div>
+          <div>
+            <label className="label">End date</label>
+            <input
+              className="input inputSm"
+              type="date"
+              value={endDate || ""}
+              onChange={(e) => setEndDate(e.target.value)}
+            />
+          </div>
+          <div>
+            <div className="mutedSmall">Loaded metrics range</div>
+            <div className="mono" style={{ marginTop: 4 }}>{dateRangeLabel}</div>
+          </div>
+          <div>
+            <div className="mutedSmall">Last updated</div>
+            <div className="mono" style={{ marginTop: 4 }}>{lastUpdatedLabel}</div>
+          </div>
+          <div>
+            <label className="label">Search campaign / ad group / keyword</label>
+            <input
+              className="input inputSm"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="e.g., Prebook 1499, Import Export Intelligence, trade data india…"
+            />
+          </div>
+        </div>
+        <div className="mutedSmall" style={{ marginTop: 8 }}>
+          Change the dates, then click “Refresh Google Ads” to reload cost/click metrics for that range.
+        </div>
+      </div>
+
+      {error ? <div className="errorBox" style={{ marginTop: 12 }}>Error: {error}</div> : null}
+
+      {loading && !campaigns.length ? (
+        <div className="empty fancyEmpty" style={{ marginTop: 12 }}>
+          <div className="emptyIcon">📣</div>
+          <div className="emptyTitle">Loading Google Ads structure…</div>
+        </div>
+      ) : null}
+
+      {!loading && !campaigns.length && !error ? (
+        <div className="empty fancyEmpty" style={{ marginTop: 12 }}>
+          <div className="emptyIcon">🔎</div>
+          <div className="emptyTitle">No campaigns found</div>
+          <div className="mutedSmall">Try clearing the search or refreshing the view.</div>
+        </div>
+      ) : null}
+
+      <div style={{ display: "grid", gap: 12, marginTop: 14 }}>
+        {(campaigns || []).map((campaign) => {
+          const campaignOpen =
+            expandedCampaigns[campaign.id] !== undefined
+              ? expandedCampaigns[campaign.id]
+              : campaign.status === "ENABLED";
+
+          return (
+            <div
+              key={campaign.id}
+              className="card"
+              style={{
+                border:
+                  campaign.status === "ENABLED"
+                    ? "1px solid rgba(251,191,36,0.24)"
+                    : "1px solid rgba(255,255,255,0.10)",
+                background:
+                  campaign.status === "ENABLED"
+                    ? "rgba(251,191,36,0.045)"
+                    : "rgba(255,255,255,0.025)",
+              }}
+            >
+              <div
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "minmax(280px, 1.8fr) 120px repeat(5, minmax(90px, 0.65fr))",
+                  gap: 10,
+                  alignItems: "center",
+                }}
+              >
+                <button
+                  className="linkBtn"
+                  type="button"
+                  onClick={() => toggleCampaign(campaign.id)}
+                  style={{ textAlign: "left", paddingLeft: 0 }}
+                >
+                  <span style={{ fontWeight: 850, fontSize: 16 }}>
+                    {campaignOpen ? "▾" : "▸"} {campaign.name}
+                  </span>
+                  <div className="mutedSmall" style={{ marginTop: 3 }}>
+                    Campaign ID: <span className="mono">{campaign.id}</span>
+                  </div>
+                </button>
+                <div style={{ textAlign: "center" }}>{statusBadge(campaign.status)}</div>
+                <div style={{ textAlign: "center" }}><div className="mutedSmall">Impr.</div><div className="mono">{formatNumberCompact(campaign.impressions)}</div></div>
+                <div style={{ textAlign: "center" }}><div className="mutedSmall">Clicks</div><div className="mono">{formatNumberCompact(campaign.clicks)}</div></div>
+                <div style={{ textAlign: "center" }}><div className="mutedSmall">CTR</div><div className="mono">{ctr(campaign.clicks, campaign.impressions)}</div></div>
+                <div style={{ textAlign: "center" }}><div className="mutedSmall">Cost</div><div className="mono">{formatInr(campaign.cost)}</div></div>
+                <div style={{ textAlign: "center" }}><div className="mutedSmall">Conv.</div><div className="mono">{formatNumberCompact(campaign.conversions)}</div></div>
+              </div>
+
+              {campaignOpen ? (
+                <div style={{ marginTop: 12, display: "grid", gap: 10 }}>
+                  {(campaign.adGroups || []).map((adGroup) => {
+                    const adGroupKey = `${campaign.id}:${adGroup.id}`;
+                    const adGroupOpen = Boolean(expandedAdGroups[adGroupKey]);
+
+                    return (
+                      <div
+                        key={adGroupKey}
+                        style={{
+                          border: "1px solid rgba(255,255,255,0.10)",
+                          borderRadius: 14,
+                          background: "rgba(0,0,0,0.12)",
+                          padding: 12,
+                        }}
+                      >
+                        <div
+                          style={{
+                            display: "grid",
+                            gridTemplateColumns: "minmax(260px, 1.8fr) 120px repeat(4, minmax(90px, 0.65fr))",
+                            gap: 10,
+                            alignItems: "center",
+                          }}
+                        >
+                          <button
+                            className="linkBtn"
+                            type="button"
+                            onClick={() => toggleAdGroup(adGroupKey)}
+                            style={{ textAlign: "left", paddingLeft: 0 }}
+                          >
+                            <span style={{ fontWeight: 760 }}>
+                              {adGroupOpen ? "▾" : "▸"} {adGroup.name}
+                            </span>
+                            <div className="mutedSmall" style={{ marginTop: 3 }}>
+                              {formatNumberCompact((adGroup.keywords || []).length)} keyword(s)
+                            </div>
+                          </button>
+                          <div style={{ textAlign: "center" }}>{statusBadge(adGroup.status)}</div>
+                          <div style={{ textAlign: "center" }}><div className="mutedSmall">Impr.</div><div className="mono">{formatNumberCompact(adGroup.impressions)}</div></div>
+                          <div style={{ textAlign: "center" }}><div className="mutedSmall">Clicks</div><div className="mono">{formatNumberCompact(adGroup.clicks)}</div></div>
+                          <div style={{ textAlign: "center" }}><div className="mutedSmall">Cost</div><div className="mono">{formatInr(adGroup.cost)}</div></div>
+                          <div style={{ textAlign: "center" }}><div className="mutedSmall">Conv.</div><div className="mono">{formatNumberCompact(adGroup.conversions)}</div></div>
+                        </div>
+
+                        {adGroupOpen ? (
+                          <div className="tableWrap" style={{ marginTop: 10 }}>
+                            <table className="table">
+                              <thead>
+                                <tr>
+                                  <th>Keyword</th>
+                                  <th style={{ width: 120, textAlign: "center" }}>Match type</th>
+                                  <th style={{ width: 105, textAlign: "center" }}>Status</th>
+                                  <th style={{ width: 95, textAlign: "center" }}>Impr.</th>
+                                  <th style={{ width: 85, textAlign: "center" }}>Clicks</th>
+                                  <th style={{ width: 90, textAlign: "center" }}>CTR</th>
+                                  <th style={{ width: 110, textAlign: "center" }}>Cost</th>
+                                  <th style={{ width: 100, textAlign: "center" }}>Conv.</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {(adGroup.keywords || []).map((keyword) => (
+                                  <tr key={`${adGroupKey}:${keyword.id}:${keyword.text}`} className="row">
+                                    <td>
+                                      <div className="titleCell">{keyword.text}</div>
+                                      <div className="mutedSmall mono">{keyword.id}</div>
+                                    </td>
+                                    <td style={{ textAlign: "center" }}>{keyword.matchType || "-"}</td>
+                                    <td style={{ textAlign: "center" }}>{statusBadge(keyword.status)}</td>
+                                    <td className="mono" style={{ textAlign: "center" }}>{formatNumberCompact(keyword.impressions)}</td>
+                                    <td className="mono" style={{ textAlign: "center" }}>{formatNumberCompact(keyword.clicks)}</td>
+                                    <td className="mono" style={{ textAlign: "center" }}>{ctr(keyword.clicks, keyword.impressions)}</td>
+                                    <td className="mono" style={{ textAlign: "center" }}>{formatInr(keyword.cost)}</td>
+                                    <td className="mono" style={{ textAlign: "center" }}>{formatNumberCompact(keyword.conversions)}</td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                        ) : null}
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : null}
+            </div>
+          );
+        })}
+      </div>
+
+      <div className="mutedSmall" style={{ marginTop: 12 }}>
+        API source: <span className="mono">{meta?.source || "not connected"}</span>
+      </div>
+    </div>
+  );
+}
 
 
 function AdsIntelligencePanel({
