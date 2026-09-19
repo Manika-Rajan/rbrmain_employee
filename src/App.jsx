@@ -961,9 +961,93 @@ function sumGoogleAdsKeywordMetrics(keywords = []) {
   );
 }
 
+function normalizeGoogleAdsNegativeKeywords(parsed = {}) {
+  const block =
+    parsed?.negativeKeywords ||
+    parsed?.negative_keywords ||
+    {};
+
+  const campaignLevel = Array.isArray(block?.campaignLevel)
+    ? block.campaignLevel
+    : Array.isArray(block?.campaign_level)
+    ? block.campaign_level
+    : [];
+
+  const adGroupLevel = Array.isArray(block?.adGroupLevel)
+    ? block.adGroupLevel
+    : Array.isArray(block?.ad_group_level)
+    ? block.ad_group_level
+    : [];
+
+  function normalizeItem(item = {}, index = 0, scope = "CAMPAIGN") {
+    return {
+      id:
+        item.keywordId ||
+        item.keyword_id ||
+        item.criterionId ||
+        item.criterion_id ||
+        `negative-${scope}-${index}`,
+
+      scope,
+
+      text:
+        item.text ||
+        item.keyword ||
+        item.keywordText ||
+        item.keyword_text ||
+        "-",
+
+      matchType: normalizeGoogleAdsMatchType(
+        item.matchType ||
+          item.match_type ||
+          item.keywordMatchType ||
+          item.keyword_match_type
+      ),
+
+      status: normalizeGoogleAdsEntityStatus(
+        item.status ||
+          item.keywordStatus ||
+          item.keyword_status
+      ),
+
+      campaignId:
+        item.campaignId ||
+        item.campaign_id ||
+        "",
+
+      campaignName:
+        item.campaignName ||
+        item.campaign_name ||
+        "Unnamed campaign",
+
+      adGroupId:
+        item.adGroupId ||
+        item.ad_group_id ||
+        "",
+
+      adGroupName:
+        item.adGroupName ||
+        item.ad_group_name ||
+        "",
+
+      raw: item,
+    };
+  }
+
+  return [
+    ...campaignLevel.map((item, index) =>
+      normalizeItem(item, index, "CAMPAIGN")
+    ),
+    ...adGroupLevel.map((item, index) =>
+      normalizeItem(item, index, "AD_GROUP")
+    ),
+  ];
+}
+
 function normalizeGoogleAdsManagerPayload(payload) {
   const parsed = unwrapApiPayload(payload);
   const rawCampaigns = Array.isArray(parsed?.campaigns) ? parsed.campaigns : [];
+  const negativeKeywords = normalizeGoogleAdsNegativeKeywords(parsed);
 
   // Preferred response shape from the dedicated Google Ads Structure API.
   if (rawCampaigns.length) {
@@ -1054,6 +1138,7 @@ function normalizeGoogleAdsManagerPayload(payload) {
 
     return {
       campaigns,
+      negativeKeywords,
       dateRange: parsed?.dateRange || parsed?.date_range || null,
       lastUpdatedAt:
         parsed?.lastUpdatedAt ||
@@ -2044,6 +2129,7 @@ export default function App() {
   const [expandedAdsRows, setExpandedAdsRows] = useState({});
   const [adsMeta, setAdsMeta] = useState({ total: 0, source: "", lastPulledAt: "" });
   const [googleAdsCampaigns, setGoogleAdsCampaigns] = useState([]);
+  const [googleAdsNegativeKeywords, setGoogleAdsNegativeKeywords] = useState([]);
   const [googleAdsManagerLoading, setGoogleAdsManagerLoading] = useState(false);
   const [googleAdsManagerError, setGoogleAdsManagerError] = useState("");
   const [googleAdsManagerSearch, setGoogleAdsManagerSearch] = useState("");
@@ -3766,6 +3852,7 @@ export default function App() {
 
       const normalized = normalizeGoogleAdsManagerPayload(data);
       setGoogleAdsCampaigns(normalized.campaigns);
+      setGoogleAdsNegativeKeywords(normalized.negativeKeywords || []);
       setGoogleAdsManagerMeta({
         source: normalized.source,
         lastUpdatedAt: normalized.lastUpdatedAt,
@@ -5883,6 +5970,7 @@ export default function App() {
             ) : isGoogleAdsManager ? (
               <GoogleAdsManagerPanel
                 campaigns={filteredGoogleAdsCampaigns}
+                negativeKeywords={googleAdsNegativeKeywords}
                 summary={googleAdsManagerSummary}
                 loading={googleAdsManagerLoading}
                 error={googleAdsManagerError}
@@ -7113,6 +7201,7 @@ function CatalogSuggestionsPanel({
 
 function GoogleAdsManagerPanel({
   campaigns,
+  negativeKeywords,
   summary,
   loading,
   error,
@@ -7134,6 +7223,39 @@ function GoogleAdsManagerPanel({
     adGroups: false,
     keywords: false,
   });
+
+  const [negativeKeywordsOpen, setNegativeKeywordsOpen] = useState(false);
+
+  const visibleNegativeKeywords = useMemo(() => {
+    const q = normalize(search);
+  
+    if (!q) return negativeKeywords || [];
+  
+    return (negativeKeywords || []).filter((item) =>
+      [
+        item.text,
+        item.matchType,
+        item.status,
+        item.scope,
+        item.campaignName,
+        item.adGroupName,
+      ]
+        .map(normalize)
+        .some((value) => value.includes(q))
+    );
+  }, [negativeKeywords, search]);
+  
+  const negativeKeywordSummary = useMemo(() => {
+    return {
+      total: visibleNegativeKeywords.length,
+      campaignLevel: visibleNegativeKeywords.filter(
+        (item) => item.scope === "CAMPAIGN"
+      ).length,
+      adGroupLevel: visibleNegativeKeywords.filter(
+        (item) => item.scope === "AD_GROUP"
+      ).length,
+    };
+  }, [visibleNegativeKeywords]);
 
   const visibleCampaigns = useMemo(
     () => filterGoogleAdsEnabledHierarchy(campaigns, enabledOnlyFilters),
@@ -7577,6 +7699,170 @@ function GoogleAdsManagerPanel({
             </div>
           );
         })}
+      </div>
+
+      <div
+        className="card glass"
+        style={{
+          marginTop: 18,
+          border: "1px solid rgba(248,113,113,0.24)",
+          background: "rgba(248,113,113,0.035)",
+          overflow: "hidden",
+        }}
+      >
+        <button
+          type="button"
+          onClick={() => setNegativeKeywordsOpen((value) => !value)}
+          style={{
+            width: "100%",
+            border: 0,
+            background: "transparent",
+            color: "inherit",
+            padding: 14,
+            cursor: "pointer",
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "center",
+            gap: 12,
+            flexWrap: "wrap",
+            textAlign: "left",
+          }}
+        >
+          <div>
+            <div
+              style={{
+                fontWeight: 800,
+                fontSize: 15,
+              }}
+            >
+              {negativeKeywordsOpen ? "▾" : "▸"} Negative Keywords
+            </div>
+      
+            <div className="mutedSmall" style={{ marginTop: 4 }}>
+              Keywords excluded from triggering ads.
+            </div>
+          </div>
+      
+          <div
+            style={{
+              display: "flex",
+              gap: 8,
+              flexWrap: "wrap",
+            }}
+          >
+            <span className="chipDisabled">
+              Total {negativeKeywordSummary.total}
+            </span>
+      
+            <span className="chipDisabled">
+              Campaign {negativeKeywordSummary.campaignLevel}
+            </span>
+      
+            <span className="chipDisabled">
+              Ad group {negativeKeywordSummary.adGroupLevel}
+            </span>
+          </div>
+        </button>
+      
+        {negativeKeywordsOpen ? (
+          visibleNegativeKeywords.length ? (
+            <div className="tableWrap">
+              <table className="table">
+                <thead>
+                  <tr>
+                    <th style={{ width: 120, textAlign: "center" }}>
+                      Scope
+                    </th>
+      
+                    <th>
+                      Negative keyword
+                    </th>
+      
+                    <th style={{ width: 120, textAlign: "center" }}>
+                      Match type
+                    </th>
+      
+                    <th>
+                      Campaign
+                    </th>
+      
+                    <th>
+                      Ad group
+                    </th>
+      
+                    <th style={{ width: 110, textAlign: "center" }}>
+                      Status
+                    </th>
+                  </tr>
+                </thead>
+      
+                <tbody>
+                  {visibleNegativeKeywords.map((item) => (
+                    <tr
+                      key={`${item.scope}-${item.id}-${item.text}`}
+                      className="row"
+                    >
+                      <td style={{ textAlign: "center" }}>
+                        <span
+                          className="chipDisabled"
+                          style={{
+                            whiteSpace: "nowrap",
+                          }}
+                        >
+                          {item.scope === "AD_GROUP"
+                            ? "Ad group"
+                            : "Campaign"}
+                        </span>
+                      </td>
+      
+                      <td>
+                        <div className="titleCell">
+                          {item.text}
+                        </div>
+      
+                        <div className="mutedSmall mono">
+                          {item.id}
+                        </div>
+                      </td>
+      
+                      <td
+                        className="mono"
+                        style={{
+                          textAlign: "center",
+                        }}
+                      >
+                        {item.matchType || "-"}
+                      </td>
+      
+                      <td>
+                        {item.campaignName || "-"}
+                      </td>
+      
+                      <td>
+                        {item.scope === "AD_GROUP"
+                          ? item.adGroupName || "-"
+                          : "—"}
+                      </td>
+      
+                      <td style={{ textAlign: "center" }}>
+                        {statusBadge(item.status)}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : (
+            <div
+              className="mutedSmall"
+              style={{
+                padding: "0 14px 14px",
+              }}
+            >
+              No negative keywords match the current search.
+            </div>
+          )
+        ) : null}
       </div>
 
       <div className="mutedSmall" style={{ marginTop: 12 }}>
