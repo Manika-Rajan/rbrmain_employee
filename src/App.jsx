@@ -1255,6 +1255,7 @@ function normalizeGoogleAdsManagerPayload(payload) {
 
   return {
     campaigns,
+    negativeKeywords,
     dateRange: parsed?.dateRange || parsed?.date_range || null,
     lastUpdatedAt:
       parsed?.lastUpdatedAt ||
@@ -3820,6 +3821,7 @@ export default function App() {
 
     if (!GOOGLE_ADS_STRUCTURE_API) {
       setGoogleAdsCampaigns([]);
+      setGoogleAdsNegativeKeywords([]);
       setGoogleAdsManagerMeta({ source: "", lastUpdatedAt: "", dateRange: null });
       setGoogleAdsManagerLoading(false);
       setGoogleAdsManagerError(
@@ -3870,6 +3872,7 @@ export default function App() {
       });
     } catch (e) {
       setGoogleAdsCampaigns([]);
+      setGoogleAdsNegativeKeywords([]);
       setGoogleAdsManagerMeta({ source: "", lastUpdatedAt: "", dateRange: null });
       setGoogleAdsManagerError(e?.message || "Failed to load Google Ads campaign structure");
     } finally {
@@ -7246,12 +7249,14 @@ function GoogleAdsManagerPanel({
   }, [negativeKeywords, search]);
   
   const negativeKeywordSummary = useMemo(() => {
+    const items = negativeKeywords || [];
+    
     return {
-      total: visibleNegativeKeywords.length,
-      campaignLevel: visibleNegativeKeywords.filter(
+      total: items.length,
+      campaignLevel: items.filter(
         (item) => item.scope === "CAMPAIGN"
       ).length,
-      adGroupLevel: visibleNegativeKeywords.filter(
+      adGroupLevel: items.filter(
         (item) => item.scope === "AD_GROUP"
       ).length,
     };
