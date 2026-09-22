@@ -6236,7 +6236,7 @@ export default function App() {
               </div>
             ) : null}
 
-              {!isPrebook && !isCatalog && !isSales && !isTrafficIntelligence && !isGoogleAdsManager && !isWebsiteSearches && !isBulkReports && !isInstantAdmin ? (
+              {!isPrebook && !isCatalog && !isSales && !isTrafficIntelligence && !isUserFunnel && !isGoogleAdsManager && !isWebsiteSearches && !isBulkReports && !isInstantAdmin ? (
                 <div className="card glass" style={{ marginBottom: 12, width: "100%" }}>
                   <div className="cardTitleRow">
                     <div className="cardTitle">Generated Reports (Instant)</div>
@@ -6279,7 +6279,7 @@ export default function App() {
                 </div>
               ) : null}
 
-            {!isCatalog && !isSales && !isTrafficIntelligence && !isGoogleAdsManager && !isWebsiteSearches && !isInstantAdmin ? (
+            {!isCatalog && !isSales && !isTrafficIntelligence && !isUserFunnel && !isGoogleAdsManager && !isWebsiteSearches && !isInstantAdmin ? (
               <>
                 <div className="compareHeader">
                   <div className="compareTitleRow">
@@ -6306,6 +6306,8 @@ export default function App() {
         <footer className="footer">
           {isSales
             ? "Tip: Expand a month, then expand a sale date to audit each purchase with customer and report details."
+            : isUserFunnel
+            ? "Tip: Use the funnel to find the exact stage where real visitors stop, then improve that stage before increasing ad spend."
             : isGoogleAdsManager
             ? "Tip: Expand campaign → ad group → keyword to audit status, match type, clicks, cost, and conversions without searching through Google Ads."
             : isBulkReports
@@ -6352,8 +6354,19 @@ function UserFunnelPanel({
     const sid = String(session.session_id || "").toLowerCase();
     const attr = session.attribution || {};
     const gclid = String(attr.gclid || "").toUpperCase();
+    const query = normalize(session.search_query || "");
 
-    return sid.startsWith("manual-") || gclid.startsWith("TEST-");
+    const knownInternalQueries = new Set([
+      "test1234",
+      "attrtest123",
+      "funnel tracker test",
+    ]);
+
+    return (
+      sid.startsWith("manual-") ||
+      gclid.startsWith("TEST-") ||
+      knownInternalQueries.has(query)
+    );
   }
 
   const visibleSessions = useMemo(() => {
