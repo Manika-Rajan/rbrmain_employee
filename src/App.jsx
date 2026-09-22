@@ -6362,6 +6362,7 @@ function UserFunnelPanel({
       "test1234",
       "attrtest123",
       "funnel tracker test",
+      "funnelstagetest",
     ]);
 
     return (
@@ -6404,10 +6405,31 @@ function UserFunnelPanel({
     return (session?.journey || []).some((step) => step?.event_name === eventName);
   }
 
+  // The new engagement events were introduced after the original funnel went live.
+  // A submitted search logically implies the visitor engaged with and started using
+  // the search control, so these helpers preserve a monotonic funnel for older rows.
+  function reachedSearchEngaged(session = {}) {
+    return (
+      hasEvent(session, "search_box_focused") ||
+      hasEvent(session, "search_started") ||
+      hasEvent(session, "report_search")
+    );
+  }
+
+  function reachedSearchStarted(session = {}) {
+    return hasEvent(session, "search_started") || hasEvent(session, "report_search");
+  }
+
+  function reachedSearchSubmitted(session = {}) {
+    return hasEvent(session, "report_search");
+  }
+
   const summary = useMemo(() => {
     const result = {
       sessions: visibleSessions.length,
       landing: 0,
+      searchEngaged: 0,
+      searchStarted: 0,
       searched: 0,
       offerShown: 0,
       sampleViewed: 0,
@@ -6424,7 +6446,9 @@ function UserFunnelPanel({
 
     visibleSessions.forEach((session) => {
       if (hasEvent(session, "landing_view")) result.landing += 1;
-      if (hasEvent(session, "report_search")) result.searched += 1;
+      if (reachedSearchEngaged(session)) result.searchEngaged += 1;
+      if (reachedSearchStarted(session)) result.searchStarted += 1;
+      if (reachedSearchSubmitted(session)) result.searched += 1;
       if (hasEvent(session, "prebook_offer_shown")) result.offerShown += 1;
       if (session.sample_viewed || hasEvent(session, "custom_sample_viewed")) result.sampleViewed += 1;
       if (session.instant_clicked || hasEvent(session, "instant_order_clicked")) result.instantClicked += 1;
@@ -6449,16 +6473,35 @@ function UserFunnelPanel({
     const googleSessions = baseSessions.filter((session) => isGoogleAdsSession(session));
     const directSessions = baseSessions.filter((session) => !isGoogleAdsSession(session));
 
-    const googleSearches = googleSessions.filter((session) => hasEvent(session, "report_search"));
+    const googleLandings = googleSessions.filter((session) => hasEvent(session, "landing_view"));
+    const googleSearchEngaged = googleSessions.filter((session) => reachedSearchEngaged(session));
+    const googleSearchStarted = googleSessions.filter((session) => reachedSearchStarted(session));
+    const googleSearches = googleSessions.filter((session) => reachedSearchSubmitted(session));
+    const googleOffers = googleSessions.filter((session) => hasEvent(session, "prebook_offer_shown"));
     const googlePurchases = googleSessions.filter(
       (session) => session.payment_success || hasEvent(session, "payment_success")
     );
 
+    const landingDenominator = googleLandings.length || googleSessions.length;
+
     return {
       googleSessions: googleSessions.length,
       directSessions: directSessions.length,
+      googleLandings: googleLandings.length,
+      googleSearchEngaged: googleSearchEngaged.length,
+      googleSearchStarted: googleSearchStarted.length,
       googleSearches: googleSearches.length,
+      googleOffers: googleOffers.length,
       googlePurchases: googlePurchases.length,
+      googleLandingToEngagedRate: landingDenominator
+        ? Math.round((googleSearchEngaged.length / landingDenominator) * 100)
+        : 0,
+      googleEngagedToSubmittedRate: googleSearchEngaged.length
+        ? Math.round((googleSearches.length / googleSearchEngaged.length) * 100)
+        : 0,
+      googleSubmittedToOfferRate: googleSearches.length
+        ? Math.round((googleOffers.length / googleSearches.length) * 100)
+        : 0,
       googleSearchRate: googleSessions.length
         ? Math.round((googleSearches.length / googleSessions.length) * 100)
         : 0,
@@ -6503,9 +6546,11 @@ function UserFunnelPanel({
 
   const funnelStages = [
     { key: "sessions", label: "Sessions", value: summary.sessions, color: "rgba(96,165,250,0.88)" },
-    { key: "searched", label: "Searched", value: summary.searched, color: "rgba(56,189,248,0.88)" },
-    { key: "offer", label: "Offer shown", value: summary.offerShown, color: "rgba(45,212,191,0.88)" },
-    { key: "custom", label: "Custom clicked", value: summary.customClicked, color: "rgba(52,211,153,0.88)" },
+    { key: "search-engaged", label: "Search engaged", value: summary.searchEngaged, color: "rgba(56,189,248,0.88)" },
+    { key: "search-started", label: "Search started", value: summary.searchStarted, color: "rgba(34,211,238,0.88)" },
+    { key: "searched", label: "Search submitted", value: summary.searched, color: "rgba(45,212,191,0.88)" },
+    { key: "offer", label: "Offer shown", value: summary.offerShown, color: "rgba(52,211,153,0.88)" },
+    { key: "custom", label: "Custom clicked", value: summary.customClicked, color: "rgba(163,230,53,0.88)" },
     { key: "identity", label: "Identity ready", value: summary.identityReady, color: "rgba(250,204,21,0.88)" },
     { key: "razorpay", label: "Razorpay opened", value: summary.razorpayOpened, color: "rgba(251,146,60,0.90)" },
     { key: "paid", label: "Purchased", value: summary.purchases, color: "rgba(34,197,94,0.95)" },
@@ -6559,6 +6604,13 @@ function UserFunnelPanel({
     return "No choice";
   }
 
+  function getSearchStage(session = {}) {
+    if (reachedSearchSubmitted(session)) return "Submitted";
+    if (hasEvent(session, "search_started")) return "Started typing";
+    if (hasEvent(session, "search_box_focused")) return "Engaged";
+    return "Not engaged";
+  }
+
   function getOutcome(session = {}) {
     if (session.payment_success || hasEvent(session, "payment_success")) return "Paid";
     if (session.payment_cancelled || hasEvent(session, "payment_cancelled")) return "Cancelled";
@@ -6568,7 +6620,9 @@ function UserFunnelPanel({
     if (session.custom_clicked || hasEvent(session, "prebook_order_clicked")) return "Custom clicked";
     if (session.instant_clicked || hasEvent(session, "instant_order_clicked")) return "Instant clicked";
     if (hasEvent(session, "prebook_offer_shown")) return "Offer viewed";
-    if (hasEvent(session, "report_search")) return "Searched";
+    if (reachedSearchSubmitted(session)) return "Search submitted";
+    if (hasEvent(session, "search_started")) return "Search started";
+    if (hasEvent(session, "search_box_focused")) return "Search engaged";
     return "Landed";
   }
 
@@ -6616,7 +6670,7 @@ function UserFunnelPanel({
           <div>
             <div className="cardTitle">User Funnel</div>
             <div className="mutedSmall" style={{ marginTop: 4 }}>
-              Follow the real customer journey from landing → search → offer → product choice → Razorpay → purchase.
+              Follow the real customer journey from landing → search engagement → search submission → offer → product choice → Razorpay → purchase.
             </div>
           </div>
 
@@ -6685,7 +6739,15 @@ function UserFunnelPanel({
             <div className="statValue">{summary.sessions}</div>
           </div>
           <div className="statCard">
-            <div className="mutedSmall">Website searches</div>
+            <div className="mutedSmall">Search engaged</div>
+            <div className="statValue">{summary.searchEngaged}</div>
+          </div>
+          <div className="statCard">
+            <div className="mutedSmall">Search started</div>
+            <div className="statValue">{summary.searchStarted}</div>
+          </div>
+          <div className="statCard">
+            <div className="mutedSmall">Search submitted</div>
             <div className="statValue">{summary.searched}</div>
           </div>
           <div className="statCard">
@@ -6729,7 +6791,7 @@ function UserFunnelPanel({
               </div>
             </div>
             <div className="mutedSmall">
-              Google Ads search rate: <span className="mono">{trafficSourceSummary.googleSearchRate}%</span>
+              Google Ads session → purchase: <span className="mono">{trafficSourceSummary.googlePurchaseRate}%</span>
             </div>
           </div>
 
@@ -6743,8 +6805,20 @@ function UserFunnelPanel({
               <div className="statValue">{trafficSourceSummary.directSessions}</div>
             </div>
             <div className="statCard">
-              <div className="mutedSmall">Google Ads searches</div>
+              <div className="mutedSmall">Google Ads search engaged</div>
+              <div className="statValue">{trafficSourceSummary.googleSearchEngaged}</div>
+            </div>
+            <div className="statCard">
+              <div className="mutedSmall">Google Ads search started</div>
+              <div className="statValue">{trafficSourceSummary.googleSearchStarted}</div>
+            </div>
+            <div className="statCard">
+              <div className="mutedSmall">Google Ads search submitted</div>
               <div className="statValue">{trafficSourceSummary.googleSearches}</div>
+            </div>
+            <div className="statCard">
+              <div className="mutedSmall">Google Ads offer shown</div>
+              <div className="statValue">{trafficSourceSummary.googleOffers}</div>
             </div>
             <div className="statCard">
               <div className="mutedSmall">Google Ads purchases</div>
@@ -6752,8 +6826,33 @@ function UserFunnelPanel({
             </div>
           </div>
 
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
+              gap: 10,
+              marginTop: 12,
+            }}
+          >
+            <div className="statCard">
+              <div className="mutedSmall">Landing → Search engaged</div>
+              <div className="statValue">{trafficSourceSummary.googleLandingToEngagedRate}%</div>
+              <div className="mutedSmall" style={{ marginTop: 4 }}>Google Ads diagnostic rate</div>
+            </div>
+            <div className="statCard">
+              <div className="mutedSmall">Search engaged → Search submitted</div>
+              <div className="statValue">{trafficSourceSummary.googleEngagedToSubmittedRate}%</div>
+              <div className="mutedSmall" style={{ marginTop: 4 }}>Google Ads diagnostic rate</div>
+            </div>
+            <div className="statCard">
+              <div className="mutedSmall">Search submitted → Offer shown</div>
+              <div className="statValue">{trafficSourceSummary.googleSubmittedToOfferRate}%</div>
+              <div className="mutedSmall" style={{ marginTop: 4 }}>Google Ads diagnostic rate</div>
+            </div>
+          </div>
+
           <div className="mutedSmall" style={{ marginTop: 9 }}>
-            Google Ads session → search: <span className="mono">{trafficSourceSummary.googleSearchRate}%</span>
+            Google Ads session → search submitted: <span className="mono">{trafficSourceSummary.googleSearchRate}%</span>
             {" • "}
             Google Ads session → purchase: <span className="mono">{trafficSourceSummary.googlePurchaseRate}%</span>
           </div>
@@ -6770,11 +6869,11 @@ function UserFunnelPanel({
         <div className="cardTitleRow">
           <div>
             <div className="cardTitle">Conversion Funnel</div>
-            <div className="mutedSmall">Unique sessions reaching each stage</div>
+            <div className="mutedSmall">Unique sessions reaching each stage • submitted searches count as engaged/started for historical compatibility</div>
           </div>
           <div className="mutedSmall" style={{ textAlign: "right" }}>
             <div>
-              Search → purchase: <span className="mono">{pct(summary.purchases, summary.searched)}</span>
+              Search submitted → purchase: <span className="mono">{pct(summary.purchases, summary.searched)}</span>
             </div>
             <div style={{ marginTop: 3, opacity: 0.72 }}>
               {trafficSourceFilter === "google"
@@ -6935,7 +7034,7 @@ function UserFunnelPanel({
           <div>
             <div className="cardTitle">Session Journeys</div>
             <div className="mutedSmall" style={{ marginTop: 4 }}>
-              Search, Google Ads attribution, product choice, and the deepest funnel stage reached.
+              Search engagement, submitted query, Google Ads attribution, product choice, and the deepest funnel stage reached.
             </div>
           </div>
           <div className="mutedSmall" style={{ textAlign: "right" }}>
@@ -6965,6 +7064,7 @@ function UserFunnelPanel({
                 <tr>
                   <th style={{ width: 96 }}>Time</th>
                   <th>Website search</th>
+                  <th style={{ width: 128 }}>Search stage</th>
                   <th>Source / campaign</th>
                   <th style={{ width: 92 }}>Sample</th>
                   <th style={{ width: 120 }}>Choice</th>
@@ -6983,8 +7083,10 @@ function UserFunnelPanel({
                   const campaign = getCampaign(session);
                   const source = getSource(session);
                   const hasOtp = session.otp_verified || hasEvent(session, "otp_verified");
+                  const hasIdentity = session.identity_ready || hasEvent(session, "identity_ready");
                   const hasRazorpay = session.razorpay_opened || hasEvent(session, "razorpay_opened");
                   const sample = session.sample_viewed || hasEvent(session, "custom_sample_viewed");
+                  const searchStage = getSearchStage(session);
 
                   return (
                     <React.Fragment key={sid}>
@@ -6997,6 +7099,36 @@ function UserFunnelPanel({
                           </div>
                         </td>
                         <td>
+                          <span
+                            style={{
+                              display: "inline-flex",
+                              alignItems: "center",
+                              borderRadius: 999,
+                              padding: "4px 8px",
+                              fontSize: 11,
+                              fontWeight: 750,
+                              whiteSpace: "nowrap",
+                              color: searchStage === "Submitted"
+                                ? "rgba(204,251,241,0.96)"
+                                : searchStage === "Not engaged"
+                                ? "rgba(203,213,225,0.86)"
+                                : "rgba(224,242,254,0.96)",
+                              background: searchStage === "Submitted"
+                                ? "rgba(20,184,166,0.12)"
+                                : searchStage === "Not engaged"
+                                ? "rgba(148,163,184,0.08)"
+                                : "rgba(14,165,233,0.10)",
+                              border: searchStage === "Submitted"
+                                ? "1px solid rgba(45,212,191,0.24)"
+                                : searchStage === "Not engaged"
+                                ? "1px solid rgba(148,163,184,0.16)"
+                                : "1px solid rgba(56,189,248,0.22)",
+                            }}
+                          >
+                            {searchStage}
+                          </span>
+                        </td>
+                        <td>
                           <div>{source}</div>
                           <div className="mutedSmall" title={campaign}>{campaign}</div>
                           {attribution.gclid ? (
@@ -7007,7 +7139,7 @@ function UserFunnelPanel({
                         </td>
                         <td>{sample ? "Yes" : "No"}</td>
                         <td>{getChoice(session)}</td>
-                        <td>{hasOtp ? "Verified" : session.identity_ready ? "Skipped / known" : "-"}</td>
+                        <td>{hasOtp ? "Verified" : hasIdentity ? "Skipped / known" : "-"}</td>
                         <td>{hasRazorpay ? "Opened" : "-"}</td>
                         <td>
                           <span
@@ -7034,7 +7166,7 @@ function UserFunnelPanel({
 
                       {expanded ? (
                         <tr>
-                          <td colSpan={9} style={{ padding: 0 }}>
+                          <td colSpan={10} style={{ padding: 0 }}>
                             <div
                               style={{
                                 padding: 14,
