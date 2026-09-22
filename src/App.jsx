@@ -2304,7 +2304,8 @@ export default function App() {
   }, [activeTab]);
 
   useEffect(() => {
-    if (activeTab !== "google-ads-manager") return;
+    if (!["google-ads-manager", "user-funnel"].includes(activeTab)) return;
+    if (activeTab === "user-funnel" && googleAdsCampaigns.length) return;
     loadGoogleAdsManager();
   }, [activeTab]);
 
@@ -6338,6 +6339,7 @@ function UserFunnelPanel({
   copyToClipboard,
 }) {
   const [expandedSessions, setExpandedSessions] = useState({});
+  const [trafficSourceFilter, setTrafficSourceFilter] = useState("all");
 
   const campaignNameMap = useMemo(() => {
     const map = new Map();
@@ -6369,9 +6371,34 @@ function UserFunnelPanel({
     );
   }
 
-  const visibleSessions = useMemo(() => {
+  function isGoogleAdsSession(session = {}) {
+    const attr = session?.attribution || {};
+    const utmSource = normalize(attr.utm_source || "");
+    return Boolean(
+      attr.gclid ||
+        attr.gbraid ||
+        attr.wbraid ||
+        attr.gad_campaignid ||
+        attr.campaignid ||
+        utmSource === "google" ||
+        utmSource === "googleads" ||
+        utmSource === "google_ads"
+    );
+  }
+
+  const baseSessions = useMemo(() => {
     return allSessions.filter((session) => (excludeTests ? !isTestSession(session) : true));
   }, [allSessions, excludeTests]);
+
+  const visibleSessions = useMemo(() => {
+    if (trafficSourceFilter === "google") {
+      return baseSessions.filter((session) => isGoogleAdsSession(session));
+    }
+    if (trafficSourceFilter === "direct") {
+      return baseSessions.filter((session) => !isGoogleAdsSession(session));
+    }
+    return baseSessions;
+  }, [baseSessions, trafficSourceFilter]);
 
   function hasEvent(session, eventName) {
     return (session?.journey || []).some((step) => step?.event_name === eventName);
@@ -6417,6 +6444,29 @@ function UserFunnelPanel({
 
     return result;
   }, [visibleSessions]);
+
+  const trafficSourceSummary = useMemo(() => {
+    const googleSessions = baseSessions.filter((session) => isGoogleAdsSession(session));
+    const directSessions = baseSessions.filter((session) => !isGoogleAdsSession(session));
+
+    const googleSearches = googleSessions.filter((session) => hasEvent(session, "report_search"));
+    const googlePurchases = googleSessions.filter(
+      (session) => session.payment_success || hasEvent(session, "payment_success")
+    );
+
+    return {
+      googleSessions: googleSessions.length,
+      directSessions: directSessions.length,
+      googleSearches: googleSearches.length,
+      googlePurchases: googlePurchases.length,
+      googleSearchRate: googleSessions.length
+        ? Math.round((googleSearches.length / googleSessions.length) * 100)
+        : 0,
+      googlePurchaseRate: googleSessions.length
+        ? Math.round((googlePurchases.length / googleSessions.length) * 100)
+        : 0,
+    };
+  }, [baseSessions]);
 
   const sampleEffectiveness = useMemo(() => {
     const offerSessions = visibleSessions.filter((s) => hasEvent(s, "prebook_offer_shown"));
@@ -6592,8 +6642,13 @@ function UserFunnelPanel({
         <div style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap", marginTop: 10 }}>
           <span className="mutedSmall">
             {selectedDateLabel} • {visibleSessions.length} session(s) shown
-            {allSessions.length !== visibleSessions.length ? ` of ${allSessions.length}` : ""}
+            {trafficSourceFilter !== "all"
+              ? ` of ${baseSessions.length} after test filtering`
+              : allSessions.length !== baseSessions.length
+              ? ` of ${allSessions.length} total`
+              : ""}
           </span>
+
           <label
             className="chipPill"
             style={{ display: "inline-flex", alignItems: "center", gap: 8, cursor: "pointer" }}
@@ -6605,6 +6660,21 @@ function UserFunnelPanel({
             />
             Exclude obvious internal/test sessions
           </label>
+
+          <div style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
+            <span className="mutedSmall">Traffic source</span>
+            <select
+              className="input inputSm"
+              value={trafficSourceFilter}
+              onChange={(e) => setTrafficSourceFilter(e.target.value)}
+              style={{ width: 170, minWidth: 170 }}
+              title="Filter the funnel and session journey table by traffic source"
+            >
+              <option value="all">All traffic</option>
+              <option value="google">Google Ads only</option>
+              <option value="direct">Direct / unknown</option>
+            </select>
+          </div>
         </div>
 
         {error ? <div className="errorBox" style={{ marginTop: 12 }}>Error: {error}</div> : null}
@@ -6643,6 +6713,51 @@ function UserFunnelPanel({
             <div className="statValue">{formatInr(summary.revenue)}</div>
           </div>
         </div>
+
+        <div
+          style={{
+            marginTop: 14,
+            paddingTop: 14,
+            borderTop: "1px solid rgba(255,255,255,0.08)",
+          }}
+        >
+          <div className="cardTitleRow" style={{ marginBottom: 10 }}>
+            <div>
+              <div className="cardTitle" style={{ fontSize: 14 }}>Traffic Source Snapshot</div>
+              <div className="mutedSmall">
+                Real/test-filtered sessions before the traffic-source dropdown is applied.
+              </div>
+            </div>
+            <div className="mutedSmall">
+              Google Ads search rate: <span className="mono">{trafficSourceSummary.googleSearchRate}%</span>
+            </div>
+          </div>
+
+          <div className="statsGrid">
+            <div className="statCard">
+              <div className="mutedSmall">Google Ads sessions</div>
+              <div className="statValue">{trafficSourceSummary.googleSessions}</div>
+            </div>
+            <div className="statCard">
+              <div className="mutedSmall">Direct / unknown sessions</div>
+              <div className="statValue">{trafficSourceSummary.directSessions}</div>
+            </div>
+            <div className="statCard">
+              <div className="mutedSmall">Google Ads searches</div>
+              <div className="statValue">{trafficSourceSummary.googleSearches}</div>
+            </div>
+            <div className="statCard">
+              <div className="mutedSmall">Google Ads purchases</div>
+              <div className="statValue">{trafficSourceSummary.googlePurchases}</div>
+            </div>
+          </div>
+
+          <div className="mutedSmall" style={{ marginTop: 9 }}>
+            Google Ads session → search: <span className="mono">{trafficSourceSummary.googleSearchRate}%</span>
+            {" • "}
+            Google Ads session → purchase: <span className="mono">{trafficSourceSummary.googlePurchaseRate}%</span>
+          </div>
+        </div>
       </section>
 
       <section
@@ -6657,8 +6772,17 @@ function UserFunnelPanel({
             <div className="cardTitle">Conversion Funnel</div>
             <div className="mutedSmall">Unique sessions reaching each stage</div>
           </div>
-          <div className="mutedSmall">
-            Search → purchase: <span className="mono">{pct(summary.purchases, summary.searched)}</span>
+          <div className="mutedSmall" style={{ textAlign: "right" }}>
+            <div>
+              Search → purchase: <span className="mono">{pct(summary.purchases, summary.searched)}</span>
+            </div>
+            <div style={{ marginTop: 3, opacity: 0.72 }}>
+              {trafficSourceFilter === "google"
+                ? "Google Ads only"
+                : trafficSourceFilter === "direct"
+                ? "Direct / unknown only"
+                : "All traffic"}
+            </div>
           </div>
         </div>
 
@@ -6814,14 +6938,25 @@ function UserFunnelPanel({
               Search, Google Ads attribution, product choice, and the deepest funnel stage reached.
             </div>
           </div>
-          <div className="mutedSmall">{visibleSessions.length} session(s)</div>
+          <div className="mutedSmall" style={{ textAlign: "right" }}>
+            <div>{visibleSessions.length} session(s)</div>
+            <div style={{ marginTop: 3, opacity: 0.72 }}>
+              {trafficSourceFilter === "google"
+                ? "Google Ads only"
+                : trafficSourceFilter === "direct"
+                ? "Direct / unknown only"
+                : "All traffic"}
+            </div>
+          </div>
         </div>
 
         {!visibleSessions.length ? (
           <div className="empty fancyEmpty" style={{ marginTop: 14 }}>
             <div className="emptyIcon">↘</div>
             <div className="emptyTitle">{loading ? "Loading funnel…" : "No funnel sessions for this date"}</div>
-            <div className="mutedSmall">Choose another date or wait for new website activity.</div>
+            <div className="mutedSmall">
+              Choose another date, change the traffic-source filter, or wait for new website activity.
+            </div>
           </div>
         ) : (
           <div className="tableWrap" style={{ marginTop: 14 }}>
