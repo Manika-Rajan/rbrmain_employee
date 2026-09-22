@@ -1998,6 +1998,9 @@ export default function App() {
   const GOOGLE_ADS_STRUCTURE_API = import.meta.env.VITE_GOOGLE_ADS_STRUCTURE_API || "";
   const WEBSITE_SEARCHES_API = import.meta.env.VITE_WEBSITE_SEARCHES_API || TRAFFIC_INTELLIGENCE_API || "";
   const BULK_REPORTS_API = import.meta.env.VITE_BULK_REPORTS_API || "";
+  const USER_FUNNEL_API =
+    import.meta.env.VITE_USER_FUNNEL_API ||
+    "https://jp1bupouyl.execute-api.ap-south-1.amazonaws.com/prod/google-ads-funnel-event";
   const SUGGEST_API = "https://vtwyu7hv50.execute-api.ap-south-1.amazonaws.com/default/suggest";
   const SUGGEST_PREVIEW_API = "https://vtwyu7hv50.execute-api.ap-south-1.amazonaws.com/default/RBR_report_pre-signed_URL";
 
@@ -2016,6 +2019,7 @@ export default function App() {
   const isCatalog = activeTab === "catalog";
   const isSales = activeTab === "sales";
   const isTrafficIntelligence = activeTab === "traffic-intelligence";
+  const isUserFunnel = activeTab === "user-funnel";
   const isGoogleAdsManager = activeTab === "google-ads-manager";
   const isWebsiteSearches = activeTab === "website-searches";
   const isBulkReports = activeTab === "bulk-reports";
@@ -2129,6 +2133,14 @@ export default function App() {
   const [adsDeviceFilter, setAdsDeviceFilter] = useState("all");
   const [expandedAdsRows, setExpandedAdsRows] = useState({});
   const [adsMeta, setAdsMeta] = useState({ total: 0, source: "", lastPulledAt: "" });
+
+  // User Funnel — first-party website journey tracking
+  const [userFunnelData, setUserFunnelData] = useState(null);
+  const [userFunnelLoading, setUserFunnelLoading] = useState(false);
+  const [userFunnelError, setUserFunnelError] = useState("");
+  const [userFunnelDate, setUserFunnelDate] = useState(() => getDateKey(new Date()));
+  const [userFunnelExcludeTests, setUserFunnelExcludeTests] = useState(true);
+
   const [googleAdsCampaigns, setGoogleAdsCampaigns] = useState([]);
   const [googleAdsNegativeKeywords, setGoogleAdsNegativeKeywords] = useState([]);
   const [googleAdsManagerLoading, setGoogleAdsManagerLoading] = useState(false);
@@ -2284,6 +2296,11 @@ export default function App() {
   useEffect(() => {
     if (activeTab !== "traffic-intelligence") return;
     loadAdsIntelligence();
+  }, [activeTab]);
+
+  useEffect(() => {
+    if (activeTab !== "user-funnel") return;
+    loadUserFunnel();
   }, [activeTab]);
 
   useEffect(() => {
@@ -3815,6 +3832,48 @@ export default function App() {
     }
   }
 
+  async function loadUserFunnel(dateOverride = userFunnelDate) {
+    setUserFunnelLoading(true);
+    setUserFunnelError("");
+
+    if (!USER_FUNNEL_API) {
+      setUserFunnelData(null);
+      setUserFunnelLoading(false);
+      setUserFunnelError(
+        "Missing User Funnel API. Set VITE_USER_FUNNEL_API or use the production fallback endpoint."
+      );
+      return;
+    }
+
+    try {
+      const selectedDate = String(dateOverride || userFunnelDate || getDateKey(new Date())).trim();
+      const cleanApi = String(USER_FUNNEL_API || "")
+        .trim()
+        .replace(/^["']|["']$/g, "");
+
+      const url = new URL(cleanApi, window.location.origin);
+      url.searchParams.set("date", selectedDate);
+      url.searchParams.set("_ts", String(Date.now()));
+
+      const { res, data } = await fetchJson(url.toString(), {
+        method: "GET",
+        headers: { Accept: "application/json" },
+      });
+
+      if (!res.ok || data?.ok === false) {
+        throw new Error(buildErrorMessage(res, data, "User Funnel API failed"));
+      }
+
+      setUserFunnelData(data || null);
+      setLastApiResponse(data || null);
+    } catch (e) {
+      setUserFunnelData(null);
+      setUserFunnelError(e?.message || "Failed to load User Funnel data");
+    } finally {
+      setUserFunnelLoading(false);
+    }
+  }
+
   async function loadGoogleAdsManager() {
     setGoogleAdsManagerLoading(true);
     setGoogleAdsManagerError("");
@@ -5176,6 +5235,25 @@ export default function App() {
               <button
                 type="button"
                 className="chipPill"
+                onClick={() => setActiveTab("user-funnel")}
+                style={{
+                  border:
+                    activeTab === "user-funnel"
+                      ? "1px solid rgba(45,212,191,0.52)"
+                      : "1px solid rgba(255,255,255,0.14)",
+                  background:
+                    activeTab === "user-funnel" ? "rgba(45,212,191,0.16)" : "rgba(255,255,255,0.08)",
+                  color:
+                    activeTab === "user-funnel"
+                      ? "rgba(204,251,241,0.98)"
+                      : "rgba(255,255,255,0.88)",
+                }}
+              >
+                User Funnel
+              </button>
+              <button
+                type="button"
+                className="chipPill"
                 onClick={() => setActiveTab("google-ads-manager")}
                 style={{
                   border:
@@ -5854,8 +5932,8 @@ export default function App() {
           </>
         ) : null}
 
-        <div className={clsx("body", (leftHidden || isPrebook || isCatalog || isSales || isTrafficIntelligence || isGoogleAdsManager || isWebsiteSearches || isBulkReports || isInstantAdmin) && "bodyFull")}>
-          {!leftHidden && !isPrebook && !isCatalog && !isSales && !isTrafficIntelligence && !isGoogleAdsManager && !isWebsiteSearches && !isBulkReports && !isInstantAdmin ? (
+        <div className={clsx("body", (leftHidden || isPrebook || isCatalog || isSales || isTrafficIntelligence || isUserFunnel || isGoogleAdsManager || isWebsiteSearches || isBulkReports || isInstantAdmin) && "bodyFull")}>
+          {!leftHidden && !isPrebook && !isCatalog && !isSales && !isTrafficIntelligence && !isUserFunnel && !isGoogleAdsManager && !isWebsiteSearches && !isBulkReports && !isInstantAdmin ? (
             <aside className="left">
               <div className="panelScroll">
                 <div className="card glass">
@@ -5968,6 +6046,19 @@ export default function App() {
                 minimizeAllGroups={minimizeAllSearchExplorerGroups}
                 meta={searchExplorerMeta}
                 loadWebsiteSearches={loadWebsiteSearches}
+                copyToClipboard={copyToClipboard}
+              />
+            ) : isUserFunnel ? (
+              <UserFunnelPanel
+                data={userFunnelData}
+                loading={userFunnelLoading}
+                error={userFunnelError}
+                selectedDate={userFunnelDate}
+                setSelectedDate={setUserFunnelDate}
+                excludeTests={userFunnelExcludeTests}
+                setExcludeTests={setUserFunnelExcludeTests}
+                refresh={loadUserFunnel}
+                googleAdsCampaigns={googleAdsCampaigns}
                 copyToClipboard={copyToClipboard}
               />
             ) : isGoogleAdsManager ? (
@@ -6230,6 +6321,667 @@ export default function App() {
   );
 }
 
+
+
+function UserFunnelPanel({
+  data,
+  loading,
+  error,
+  selectedDate,
+  setSelectedDate,
+  excludeTests,
+  setExcludeTests,
+  refresh,
+  googleAdsCampaigns,
+  copyToClipboard,
+}) {
+  const [expandedSessions, setExpandedSessions] = useState({});
+
+  const campaignNameMap = useMemo(() => {
+    const map = new Map();
+    (googleAdsCampaigns || []).forEach((campaign) => {
+      const id = String(campaign?.id || campaign?.campaignId || campaign?.campaign_id || "").trim();
+      if (id) map.set(id, campaign?.name || campaign?.campaignName || campaign?.campaign_name || id);
+    });
+    return map;
+  }, [googleAdsCampaigns]);
+
+  const allSessions = Array.isArray(data?.sessions) ? data.sessions : [];
+
+  function isTestSession(session = {}) {
+    const sid = String(session.session_id || "").toLowerCase();
+    const attr = session.attribution || {};
+    const gclid = String(attr.gclid || "").toUpperCase();
+
+    return sid.startsWith("manual-") || gclid.startsWith("TEST-");
+  }
+
+  const visibleSessions = useMemo(() => {
+    return allSessions.filter((session) => (excludeTests ? !isTestSession(session) : true));
+  }, [allSessions, excludeTests]);
+
+  function hasEvent(session, eventName) {
+    return (session?.journey || []).some((step) => step?.event_name === eventName);
+  }
+
+  const summary = useMemo(() => {
+    const result = {
+      sessions: visibleSessions.length,
+      landing: 0,
+      searched: 0,
+      offerShown: 0,
+      sampleViewed: 0,
+      instantClicked: 0,
+      customClicked: 0,
+      otpVerified: 0,
+      identityReady: 0,
+      checkoutStarted: 0,
+      razorpayOpened: 0,
+      cancelled: 0,
+      purchases: 0,
+      revenue: 0,
+    };
+
+    visibleSessions.forEach((session) => {
+      if (hasEvent(session, "landing_view")) result.landing += 1;
+      if (hasEvent(session, "report_search")) result.searched += 1;
+      if (hasEvent(session, "prebook_offer_shown")) result.offerShown += 1;
+      if (session.sample_viewed || hasEvent(session, "custom_sample_viewed")) result.sampleViewed += 1;
+      if (session.instant_clicked || hasEvent(session, "instant_order_clicked")) result.instantClicked += 1;
+      if (session.custom_clicked || hasEvent(session, "prebook_order_clicked")) result.customClicked += 1;
+      if (session.otp_verified || hasEvent(session, "otp_verified")) result.otpVerified += 1;
+      if (session.identity_ready || hasEvent(session, "identity_ready")) result.identityReady += 1;
+      if (session.checkout_started || hasEvent(session, "checkout_started")) result.checkoutStarted += 1;
+      if (session.razorpay_opened || hasEvent(session, "razorpay_opened")) result.razorpayOpened += 1;
+      if (session.payment_cancelled || hasEvent(session, "payment_cancelled")) result.cancelled += 1;
+
+      const paid = Boolean(session.payment_success || hasEvent(session, "payment_success"));
+      if (paid) {
+        result.purchases += 1;
+        result.revenue += toAmountNumber(session.paid_value);
+      }
+    });
+
+    return result;
+  }, [visibleSessions]);
+
+  const sampleEffectiveness = useMemo(() => {
+    const offerSessions = visibleSessions.filter((s) => hasEvent(s, "prebook_offer_shown"));
+    const sampleViewers = offerSessions.filter((s) => s.sample_viewed || hasEvent(s, "custom_sample_viewed"));
+    const nonSampleViewers = offerSessions.filter((s) => !(s.sample_viewed || hasEvent(s, "custom_sample_viewed")));
+
+    const sampleCustom = sampleViewers.filter((s) => s.custom_clicked || hasEvent(s, "prebook_order_clicked"));
+    const samplePaid = sampleViewers.filter((s) => s.payment_success || hasEvent(s, "payment_success"));
+    const nonSampleCustom = nonSampleViewers.filter((s) => s.custom_clicked || hasEvent(s, "prebook_order_clicked"));
+    const nonSamplePaid = nonSampleViewers.filter((s) => s.payment_success || hasEvent(s, "payment_success"));
+
+    return {
+      sampleViewers: sampleViewers.length,
+      sampleCustom: sampleCustom.length,
+      samplePaid: samplePaid.length,
+      nonSampleViewers: nonSampleViewers.length,
+      nonSampleCustom: nonSampleCustom.length,
+      nonSamplePaid: nonSamplePaid.length,
+    };
+  }, [visibleSessions]);
+
+  const productChoice = useMemo(() => {
+    const offerSessions = visibleSessions.filter((s) => hasEvent(s, "prebook_offer_shown"));
+    const instant = offerSessions.filter((s) => s.instant_clicked || hasEvent(s, "instant_order_clicked"));
+    const custom = offerSessions.filter((s) => s.custom_clicked || hasEvent(s, "prebook_order_clicked"));
+    const acted = new Set([...instant, ...custom].map((s) => s.session_id));
+    return {
+      offers: offerSessions.length,
+      instant: instant.length,
+      custom: custom.length,
+      noAction: offerSessions.filter((s) => !acted.has(s.session_id)).length,
+    };
+  }, [visibleSessions]);
+
+  const funnelStages = [
+    { key: "sessions", label: "Sessions", value: summary.sessions, color: "rgba(96,165,250,0.88)" },
+    { key: "searched", label: "Searched", value: summary.searched, color: "rgba(56,189,248,0.88)" },
+    { key: "offer", label: "Offer shown", value: summary.offerShown, color: "rgba(45,212,191,0.88)" },
+    { key: "custom", label: "Custom clicked", value: summary.customClicked, color: "rgba(52,211,153,0.88)" },
+    { key: "identity", label: "Identity ready", value: summary.identityReady, color: "rgba(250,204,21,0.88)" },
+    { key: "razorpay", label: "Razorpay opened", value: summary.razorpayOpened, color: "rgba(251,146,60,0.90)" },
+    { key: "paid", label: "Purchased", value: summary.purchases, color: "rgba(34,197,94,0.95)" },
+  ];
+
+  function pct(n, d) {
+    if (!d) return "0%";
+    return `${Math.round((Number(n || 0) / Number(d || 1)) * 100)}%`;
+  }
+
+  function fmtTime(value) {
+    if (!value) return "-";
+    const d = new Date(value);
+    if (Number.isNaN(d.getTime())) return value;
+    return d.toLocaleTimeString("en-IN", {
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+      hour12: true,
+    });
+  }
+
+  function short(value, chars = 12) {
+    const s = String(value || "");
+    if (!s) return "-";
+    return s.length <= chars ? s : `${s.slice(0, chars)}…`;
+  }
+
+  function getCampaign(session = {}) {
+    const a = session.attribution || {};
+    const id = String(a.gad_campaignid || a.campaignid || "").trim();
+    const utm = String(a.utm_campaign || "").trim();
+    if (id) return campaignNameMap.get(id) || `Campaign ${id}`;
+    if (utm) return utm;
+    return a.gclid ? "Google Ads" : "Direct / unknown";
+  }
+
+  function getSource(session = {}) {
+    const a = session.attribution || {};
+    if (a.gclid || a.gbraid || a.wbraid) return "Google Ads";
+    if (a.utm_source) return a.utm_source;
+    return "Direct / unknown";
+  }
+
+  function getChoice(session = {}) {
+    const choseInstant = session.instant_clicked || hasEvent(session, "instant_order_clicked");
+    const choseCustom = session.custom_clicked || hasEvent(session, "prebook_order_clicked");
+    if (choseInstant && choseCustom) return "Instant + Custom";
+    if (choseCustom) return "Custom";
+    if (choseInstant) return "Instant";
+    return "No choice";
+  }
+
+  function getOutcome(session = {}) {
+    if (session.payment_success || hasEvent(session, "payment_success")) return "Paid";
+    if (session.payment_cancelled || hasEvent(session, "payment_cancelled")) return "Cancelled";
+    if (session.razorpay_opened || hasEvent(session, "razorpay_opened")) return "At Razorpay";
+    if (session.checkout_started || hasEvent(session, "checkout_started")) return "Checkout";
+    if (session.identity_ready || hasEvent(session, "identity_ready")) return "Identity ready";
+    if (session.custom_clicked || hasEvent(session, "prebook_order_clicked")) return "Custom clicked";
+    if (session.instant_clicked || hasEvent(session, "instant_order_clicked")) return "Instant clicked";
+    if (hasEvent(session, "prebook_offer_shown")) return "Offer viewed";
+    if (hasEvent(session, "report_search")) return "Searched";
+    return "Landed";
+  }
+
+  function outcomeStyle(outcome) {
+    if (outcome === "Paid") {
+      return { color: "rgba(187,247,208,0.98)", background: "rgba(34,197,94,0.14)", border: "1px solid rgba(34,197,94,0.30)" };
+    }
+    if (outcome === "Cancelled") {
+      return { color: "rgba(254,202,202,0.98)", background: "rgba(239,68,68,0.12)", border: "1px solid rgba(239,68,68,0.26)" };
+    }
+    if (["At Razorpay", "Checkout"].includes(outcome)) {
+      return { color: "rgba(254,215,170,0.98)", background: "rgba(249,115,22,0.12)", border: "1px solid rgba(249,115,22,0.26)" };
+    }
+    return { color: "rgba(224,242,254,0.98)", background: "rgba(14,165,233,0.10)", border: "1px solid rgba(14,165,233,0.22)" };
+  }
+
+  function toggleSession(sessionId) {
+    setExpandedSessions((prev) => ({
+      ...prev,
+      [sessionId]: !prev[sessionId],
+    }));
+  }
+
+  const selectedDateLabel = (() => {
+    if (!selectedDate) return "Selected day";
+    const d = new Date(`${selectedDate}T00:00:00`);
+    if (Number.isNaN(d.getTime())) return selectedDate;
+    return d.toLocaleDateString("en-IN", { day: "2-digit", month: "long", year: "numeric" });
+  })();
+
+  const sampleCustomRate = pct(sampleEffectiveness.sampleCustom, sampleEffectiveness.sampleViewers);
+  const nonSampleCustomRate = pct(sampleEffectiveness.nonSampleCustom, sampleEffectiveness.nonSampleViewers);
+
+  return (
+    <div style={{ display: "grid", gap: 14, width: "100%" }}>
+      <section
+        className="card glass"
+        style={{
+          border: "1px solid rgba(45,212,191,0.25)",
+          background: "rgba(8,20,24,0.58)",
+          boxShadow: "0 18px 50px rgba(0,0,0,0.25)",
+        }}
+      >
+        <div className="cardTitleRow" style={{ alignItems: "flex-start", gap: 14 }}>
+          <div>
+            <div className="cardTitle">User Funnel</div>
+            <div className="mutedSmall" style={{ marginTop: 4 }}>
+              Follow the real customer journey from landing → search → offer → product choice → Razorpay → purchase.
+            </div>
+          </div>
+
+          <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", justifyContent: "flex-end" }}>
+            <input
+              className="input inputSm"
+              type="date"
+              value={selectedDate || ""}
+              onChange={(e) => setSelectedDate(e.target.value)}
+              style={{ width: 160 }}
+            />
+            <button
+              className="btnSecondary"
+              type="button"
+              onClick={() => refresh(selectedDate)}
+              disabled={loading}
+            >
+              {loading ? "Refreshing…" : "Refresh"}
+            </button>
+          </div>
+        </div>
+
+        <div style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap", marginTop: 10 }}>
+          <span className="mutedSmall">
+            {selectedDateLabel} • {visibleSessions.length} session(s) shown
+            {allSessions.length !== visibleSessions.length ? ` of ${allSessions.length}` : ""}
+          </span>
+          <label
+            className="chipPill"
+            style={{ display: "inline-flex", alignItems: "center", gap: 8, cursor: "pointer" }}
+          >
+            <input
+              type="checkbox"
+              checked={excludeTests}
+              onChange={(e) => setExcludeTests(e.target.checked)}
+            />
+            Exclude obvious internal/test sessions
+          </label>
+        </div>
+
+        {error ? <div className="errorBox" style={{ marginTop: 12 }}>Error: {error}</div> : null}
+
+        <div className="statsGrid" style={{ marginTop: 14 }}>
+          <div className="statCard">
+            <div className="mutedSmall">Sessions</div>
+            <div className="statValue">{summary.sessions}</div>
+          </div>
+          <div className="statCard">
+            <div className="mutedSmall">Website searches</div>
+            <div className="statValue">{summary.searched}</div>
+          </div>
+          <div className="statCard">
+            <div className="mutedSmall">Offer shown</div>
+            <div className="statValue">{summary.offerShown}</div>
+          </div>
+          <div className="statCard">
+            <div className="mutedSmall">Sample viewed</div>
+            <div className="statValue">{summary.sampleViewed}</div>
+          </div>
+          <div className="statCard">
+            <div className="mutedSmall">Custom clicked</div>
+            <div className="statValue">{summary.customClicked}</div>
+          </div>
+          <div className="statCard">
+            <div className="mutedSmall">Razorpay opened</div>
+            <div className="statValue">{summary.razorpayOpened}</div>
+          </div>
+          <div className="statCard">
+            <div className="mutedSmall">Purchases</div>
+            <div className="statValue">{summary.purchases}</div>
+          </div>
+          <div className="statCard">
+            <div className="mutedSmall">Revenue</div>
+            <div className="statValue">{formatInr(summary.revenue)}</div>
+          </div>
+        </div>
+      </section>
+
+      <section
+        className="card glass"
+        style={{
+          border: "1px solid rgba(45,212,191,0.20)",
+          background: "rgba(255,255,255,0.035)",
+        }}
+      >
+        <div className="cardTitleRow">
+          <div>
+            <div className="cardTitle">Conversion Funnel</div>
+            <div className="mutedSmall">Unique sessions reaching each stage</div>
+          </div>
+          <div className="mutedSmall">
+            Search → purchase: <span className="mono">{pct(summary.purchases, summary.searched)}</span>
+          </div>
+        </div>
+
+        <div style={{ display: "grid", gap: 9, marginTop: 14 }}>
+          {funnelStages.map((stage, index) => {
+            const previous = index === 0 ? stage.value : funnelStages[index - 1].value;
+            const relative = summary.sessions ? Math.max(4, Math.round((stage.value / summary.sessions) * 100)) : 0;
+            return (
+              <div
+                key={stage.key}
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "145px minmax(160px, 1fr) 80px 72px",
+                  alignItems: "center",
+                  gap: 10,
+                }}
+              >
+                <div style={{ fontWeight: 650, color: "rgba(255,255,255,0.84)" }}>{stage.label}</div>
+                <div
+                  style={{
+                    height: 28,
+                    borderRadius: 999,
+                    background: "rgba(255,255,255,0.05)",
+                    border: "1px solid rgba(255,255,255,0.07)",
+                    overflow: "hidden",
+                  }}
+                >
+                  <div
+                    style={{
+                      width: `${stage.value ? relative : 0}%`,
+                      minWidth: stage.value ? 34 : 0,
+                      height: "100%",
+                      borderRadius: 999,
+                      background: stage.color,
+                      display: "flex",
+                      alignItems: "center",
+                      paddingLeft: stage.value ? 10 : 0,
+                      color: "rgba(5,15,20,0.92)",
+                      fontWeight: 850,
+                      transition: "width 180ms ease",
+                    }}
+                  >
+                    {stage.value || ""}
+                  </div>
+                </div>
+                <div className="mono" style={{ textAlign: "right" }}>{stage.value}</div>
+                <div className="mutedSmall" style={{ textAlign: "right" }}>
+                  {index === 0 ? "100%" : pct(stage.value, previous)}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </section>
+
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: "repeat(auto-fit, minmax(340px, 1fr))",
+          gap: 14,
+        }}
+      >
+        <section
+          className="card glass"
+          style={{ border: "1px solid rgba(96,165,250,0.20)", background: "rgba(255,255,255,0.035)" }}
+        >
+          <div className="cardTitleRow">
+            <div>
+              <div className="cardTitle">Product Choice</div>
+              <div className="mutedSmall">What visitors choose after seeing the offer</div>
+            </div>
+            <div className="mono">{productChoice.offers} offers</div>
+          </div>
+
+          <div className="statsGrid" style={{ marginTop: 14 }}>
+            <div className="statCard">
+              <div className="mutedSmall">Instant</div>
+              <div className="statValue">{productChoice.instant}</div>
+            </div>
+            <div className="statCard">
+              <div className="mutedSmall">Custom</div>
+              <div className="statValue">{productChoice.custom}</div>
+            </div>
+            <div className="statCard">
+              <div className="mutedSmall">No action</div>
+              <div className="statValue">{productChoice.noAction}</div>
+            </div>
+          </div>
+
+          <div className="mutedSmall" style={{ marginTop: 10 }}>
+            Custom choice rate: <span className="mono">{pct(productChoice.custom, productChoice.offers)}</span>
+            {" • "}
+            Instant choice rate: <span className="mono">{pct(productChoice.instant, productChoice.offers)}</span>
+          </div>
+        </section>
+
+        <section
+          className="card glass"
+          style={{ border: "1px solid rgba(52,211,153,0.20)", background: "rgba(255,255,255,0.035)" }}
+        >
+          <div className="cardTitleRow">
+            <div>
+              <div className="cardTitle">Sample Effectiveness</div>
+              <div className="mutedSmall">Does seeing the Custom Report sample improve intent?</div>
+            </div>
+          </div>
+
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "1fr 1fr",
+              gap: 10,
+              marginTop: 14,
+            }}
+          >
+            <div className="statCard">
+              <div className="mutedSmall">Viewed sample</div>
+              <div className="statValue">{sampleEffectiveness.sampleViewers}</div>
+              <div className="mutedSmall" style={{ marginTop: 6 }}>
+                Custom: {sampleEffectiveness.sampleCustom} ({sampleCustomRate})
+              </div>
+              <div className="mutedSmall">
+                Paid: {sampleEffectiveness.samplePaid}
+              </div>
+            </div>
+
+            <div className="statCard">
+              <div className="mutedSmall">Did not view sample</div>
+              <div className="statValue">{sampleEffectiveness.nonSampleViewers}</div>
+              <div className="mutedSmall" style={{ marginTop: 6 }}>
+                Custom: {sampleEffectiveness.nonSampleCustom} ({nonSampleCustomRate})
+              </div>
+              <div className="mutedSmall">
+                Paid: {sampleEffectiveness.nonSamplePaid}
+              </div>
+            </div>
+          </div>
+
+          <div className="mutedSmall" style={{ marginTop: 10 }}>
+            This comparison becomes meaningful after enough real offer views have accumulated.
+          </div>
+        </section>
+      </div>
+
+      <section
+        className="card glass"
+        style={{ border: "1px solid rgba(255,255,255,0.12)", background: "rgba(255,255,255,0.035)" }}
+      >
+        <div className="cardTitleRow" style={{ alignItems: "flex-start", gap: 12 }}>
+          <div>
+            <div className="cardTitle">Session Journeys</div>
+            <div className="mutedSmall" style={{ marginTop: 4 }}>
+              Search, Google Ads attribution, product choice, and the deepest funnel stage reached.
+            </div>
+          </div>
+          <div className="mutedSmall">{visibleSessions.length} session(s)</div>
+        </div>
+
+        {!visibleSessions.length ? (
+          <div className="empty fancyEmpty" style={{ marginTop: 14 }}>
+            <div className="emptyIcon">↘</div>
+            <div className="emptyTitle">{loading ? "Loading funnel…" : "No funnel sessions for this date"}</div>
+            <div className="mutedSmall">Choose another date or wait for new website activity.</div>
+          </div>
+        ) : (
+          <div className="tableWrap" style={{ marginTop: 14 }}>
+            <table className="table">
+              <thead>
+                <tr>
+                  <th style={{ width: 96 }}>Time</th>
+                  <th>Website search</th>
+                  <th>Source / campaign</th>
+                  <th style={{ width: 92 }}>Sample</th>
+                  <th style={{ width: 120 }}>Choice</th>
+                  <th style={{ width: 100 }}>OTP</th>
+                  <th style={{ width: 110 }}>Razorpay</th>
+                  <th style={{ width: 132 }}>Outcome</th>
+                  <th style={{ width: 78 }}>Details</th>
+                </tr>
+              </thead>
+              <tbody>
+                {visibleSessions.map((session) => {
+                  const sid = session.session_id || "";
+                  const expanded = Boolean(expandedSessions[sid]);
+                  const outcome = getOutcome(session);
+                  const attribution = session.attribution || {};
+                  const campaign = getCampaign(session);
+                  const source = getSource(session);
+                  const hasOtp = session.otp_verified || hasEvent(session, "otp_verified");
+                  const hasRazorpay = session.razorpay_opened || hasEvent(session, "razorpay_opened");
+                  const sample = session.sample_viewed || hasEvent(session, "custom_sample_viewed");
+
+                  return (
+                    <React.Fragment key={sid}>
+                      <tr>
+                        <td className="mono">{fmtTime(session.first_event_ts)}</td>
+                        <td>
+                          <div style={{ fontWeight: 650 }}>{session.search_query || "No search"}</div>
+                          <div className="mutedSmall" title={sid}>
+                            {short(sid, 10)}
+                          </div>
+                        </td>
+                        <td>
+                          <div>{source}</div>
+                          <div className="mutedSmall" title={campaign}>{campaign}</div>
+                          {attribution.gclid ? (
+                            <div className="mutedSmall mono" title={attribution.gclid}>
+                              gclid: {short(attribution.gclid, 10)}
+                            </div>
+                          ) : null}
+                        </td>
+                        <td>{sample ? "Yes" : "No"}</td>
+                        <td>{getChoice(session)}</td>
+                        <td>{hasOtp ? "Verified" : session.identity_ready ? "Skipped / known" : "-"}</td>
+                        <td>{hasRazorpay ? "Opened" : "-"}</td>
+                        <td>
+                          <span
+                            style={{
+                              ...outcomeStyle(outcome),
+                              display: "inline-flex",
+                              alignItems: "center",
+                              borderRadius: 999,
+                              padding: "5px 9px",
+                              fontSize: 11,
+                              fontWeight: 800,
+                              whiteSpace: "nowrap",
+                            }}
+                          >
+                            {outcome}
+                          </span>
+                        </td>
+                        <td>
+                          <button className="miniBtn" type="button" onClick={() => toggleSession(sid)}>
+                            {expanded ? "Hide" : "View"}
+                          </button>
+                        </td>
+                      </tr>
+
+                      {expanded ? (
+                        <tr>
+                          <td colSpan={9} style={{ padding: 0 }}>
+                            <div
+                              style={{
+                                padding: 14,
+                                background: "rgba(0,0,0,0.18)",
+                                borderTop: "1px solid rgba(255,255,255,0.06)",
+                                display: "grid",
+                                gap: 12,
+                              }}
+                            >
+                              <div
+                                style={{
+                                  display: "grid",
+                                  gridTemplateColumns: "repeat(auto-fit, minmax(210px, 1fr))",
+                                  gap: 10,
+                                }}
+                              >
+                                <div>
+                                  <div className="mutedSmall">Session ID</div>
+                                  <div className="mono" style={{ wordBreak: "break-all" }}>{sid}</div>
+                                </div>
+                                <div>
+                                  <div className="mutedSmall">Campaign ID</div>
+                                  <div className="mono">{attribution.gad_campaignid || attribution.campaignid || "-"}</div>
+                                </div>
+                                <div>
+                                  <div className="mutedSmall">GCLID</div>
+                                  <div className="mono" style={{ wordBreak: "break-all" }}>{attribution.gclid || "-"}</div>
+                                </div>
+                                <div>
+                                  <div className="mutedSmall">Revenue</div>
+                                  <div className="mono">{formatInr(session.paid_value || 0)}</div>
+                                </div>
+                              </div>
+
+                              <div>
+                                <div className="mutedSmall" style={{ marginBottom: 7 }}>Journey timeline</div>
+                                <div style={{ display: "flex", gap: 7, flexWrap: "wrap" }}>
+                                  {[...(session.journey || [])]
+                                    .sort((a, b) => String(a.event_ts || "").localeCompare(String(b.event_ts || "")))
+                                    .map((step, index) => (
+                                      <span
+                                        key={`${step.event_name}-${step.event_ts}-${index}`}
+                                        style={{
+                                          display: "inline-flex",
+                                          gap: 6,
+                                          alignItems: "center",
+                                          padding: "6px 9px",
+                                          borderRadius: 999,
+                                          background: "rgba(45,212,191,0.08)",
+                                          border: "1px solid rgba(45,212,191,0.18)",
+                                          color: "rgba(204,251,241,0.92)",
+                                          fontSize: 11,
+                                        }}
+                                      >
+                                        <span>{index + 1}</span>
+                                        <strong>{step.event_name}</strong>
+                                        <span style={{ opacity: 0.62 }}>{fmtTime(step.event_ts)}</span>
+                                      </span>
+                                    ))}
+                                </div>
+                              </div>
+
+                              <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                                <button className="miniBtn" type="button" onClick={() => copyToClipboard(sid)}>
+                                  Copy session ID
+                                </button>
+                                {attribution.gclid ? (
+                                  <button className="miniBtn" type="button" onClick={() => copyToClipboard(attribution.gclid)}>
+                                    Copy GCLID
+                                  </button>
+                                ) : null}
+                                <button className="miniBtn" type="button" onClick={() => copyToClipboard(JSON.stringify(session, null, 2))}>
+                                  Copy session JSON
+                                </button>
+                              </div>
+                            </div>
+                          </td>
+                        </tr>
+                      ) : null}
+                    </React.Fragment>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+
+        <div className="mutedSmall" style={{ marginTop: 10 }}>
+          Source: <span className="mono">rbrmain-funnel-events</span>
+          {data?.event_count !== undefined ? <> • Raw events: <span className="mono">{data.event_count}</span></> : null}
+        </div>
+      </section>
+    </div>
+  );
+}
 
 function BulkReportsPanel({
   reports,
