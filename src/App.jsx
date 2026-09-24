@@ -6431,6 +6431,9 @@ function UserFunnelPanel({
       searchEngaged: 0,
       searchStarted: 0,
       searched: 0,
+      existingSuggestions: 0,
+      existingSelected: 0,
+      existingOpened: 0,
       offerShown: 0,
       sampleViewed: 0,
       instantClicked: 0,
@@ -6449,6 +6452,9 @@ function UserFunnelPanel({
       if (reachedSearchEngaged(session)) result.searchEngaged += 1;
       if (reachedSearchStarted(session)) result.searchStarted += 1;
       if (reachedSearchSubmitted(session)) result.searched += 1;
+      if (hasEvent(session, "existing_report_suggestions_shown")) result.existingSuggestions += 1;
+      if (hasEvent(session, "existing_report_selected")) result.existingSelected += 1;
+      if (hasEvent(session, "existing_report_opened")) result.existingOpened += 1;
       if (hasEvent(session, "prebook_offer_shown")) result.offerShown += 1;
       if (session.sample_viewed || hasEvent(session, "custom_sample_viewed")) result.sampleViewed += 1;
       if (session.instant_clicked || hasEvent(session, "instant_order_clicked")) result.instantClicked += 1;
@@ -6477,6 +6483,15 @@ function UserFunnelPanel({
     const googleSearchEngaged = googleSessions.filter((session) => reachedSearchEngaged(session));
     const googleSearchStarted = googleSessions.filter((session) => reachedSearchStarted(session));
     const googleSearches = googleSessions.filter((session) => reachedSearchSubmitted(session));
+    const googleExistingSuggestions = googleSessions.filter((session) =>
+      hasEvent(session, "existing_report_suggestions_shown")
+    );
+    const googleExistingSelected = googleSessions.filter((session) =>
+      hasEvent(session, "existing_report_selected")
+    );
+    const googleExistingOpened = googleSessions.filter((session) =>
+      hasEvent(session, "existing_report_opened")
+    );
     const googleOffers = googleSessions.filter((session) => hasEvent(session, "prebook_offer_shown"));
     const googlePurchases = googleSessions.filter(
       (session) => session.payment_success || hasEvent(session, "payment_success")
@@ -6491,6 +6506,9 @@ function UserFunnelPanel({
       googleSearchEngaged: googleSearchEngaged.length,
       googleSearchStarted: googleSearchStarted.length,
       googleSearches: googleSearches.length,
+      googleExistingSuggestions: googleExistingSuggestions.length,
+      googleExistingSelected: googleExistingSelected.length,
+      googleExistingOpened: googleExistingOpened.length,
       googleOffers: googleOffers.length,
       googlePurchases: googlePurchases.length,
       googleLandingToEngagedRate: landingDenominator
@@ -6498,6 +6516,15 @@ function UserFunnelPanel({
         : 0,
       googleEngagedToSubmittedRate: googleSearchEngaged.length
         ? Math.round((googleSearches.length / googleSearchEngaged.length) * 100)
+        : 0,
+      googleSubmittedToExistingRate: googleSearches.length
+        ? Math.round((googleExistingSuggestions.length / googleSearches.length) * 100)
+        : 0,
+      googleExistingShownToSelectedRate: googleExistingSuggestions.length
+        ? Math.round((googleExistingSelected.length / googleExistingSuggestions.length) * 100)
+        : 0,
+      googleExistingSelectedToOpenedRate: googleExistingSelected.length
+        ? Math.round((googleExistingOpened.length / googleExistingSelected.length) * 100)
         : 0,
       googleSubmittedToOfferRate: googleSearches.length
         ? Math.round((googleOffers.length / googleSearches.length) * 100)
@@ -6544,16 +6571,11 @@ function UserFunnelPanel({
     };
   }, [visibleSessions]);
 
-  const funnelStages = [
+  const commonFunnelStages = [
     { key: "sessions", label: "Sessions", value: summary.sessions, color: "rgba(96,165,250,0.88)" },
     { key: "search-engaged", label: "Search engaged", value: summary.searchEngaged, color: "rgba(56,189,248,0.88)" },
     { key: "search-started", label: "Search started", value: summary.searchStarted, color: "rgba(34,211,238,0.88)" },
     { key: "searched", label: "Search submitted", value: summary.searched, color: "rgba(45,212,191,0.88)" },
-    { key: "offer", label: "Offer shown", value: summary.offerShown, color: "rgba(52,211,153,0.88)" },
-    { key: "custom", label: "Custom clicked", value: summary.customClicked, color: "rgba(163,230,53,0.88)" },
-    { key: "identity", label: "Identity ready", value: summary.identityReady, color: "rgba(250,204,21,0.88)" },
-    { key: "razorpay", label: "Razorpay opened", value: summary.razorpayOpened, color: "rgba(251,146,60,0.90)" },
-    { key: "paid", label: "Purchased", value: summary.purchases, color: "rgba(34,197,94,0.95)" },
   ];
 
   function pct(n, d) {
@@ -6596,8 +6618,15 @@ function UserFunnelPanel({
   }
 
   function getChoice(session = {}) {
+    const existingOpened = hasEvent(session, "existing_report_opened");
+    const existingSelected = hasEvent(session, "existing_report_selected");
+    const existingShown = hasEvent(session, "existing_report_suggestions_shown");
     const choseInstant = session.instant_clicked || hasEvent(session, "instant_order_clicked");
     const choseCustom = session.custom_clicked || hasEvent(session, "prebook_order_clicked");
+
+    if (existingOpened) return "Existing opened";
+    if (existingSelected) return "Existing selected";
+    if (existingShown) return "Existing shown";
     if (choseInstant && choseCustom) return "Instant + Custom";
     if (choseCustom) return "Custom";
     if (choseInstant) return "Instant";
@@ -6619,6 +6648,9 @@ function UserFunnelPanel({
     if (session.identity_ready || hasEvent(session, "identity_ready")) return "Identity ready";
     if (session.custom_clicked || hasEvent(session, "prebook_order_clicked")) return "Custom clicked";
     if (session.instant_clicked || hasEvent(session, "instant_order_clicked")) return "Instant clicked";
+    if (hasEvent(session, "existing_report_opened")) return "Existing report opened";
+    if (hasEvent(session, "existing_report_selected")) return "Existing report selected";
+    if (hasEvent(session, "existing_report_suggestions_shown")) return "Existing reports shown";
     if (hasEvent(session, "prebook_offer_shown")) return "Offer viewed";
     if (reachedSearchSubmitted(session)) return "Search submitted";
     if (hasEvent(session, "search_started")) return "Search started";
@@ -6635,6 +6667,9 @@ function UserFunnelPanel({
     }
     if (["At Razorpay", "Checkout"].includes(outcome)) {
       return { color: "rgba(254,215,170,0.98)", background: "rgba(249,115,22,0.12)", border: "1px solid rgba(249,115,22,0.26)" };
+    }
+    if (String(outcome || "").startsWith("Existing report") || outcome === "Existing reports shown") {
+      return { color: "rgba(224,231,255,0.98)", background: "rgba(99,102,241,0.13)", border: "1px solid rgba(129,140,248,0.28)" };
     }
     return { color: "rgba(224,242,254,0.98)", background: "rgba(14,165,233,0.10)", border: "1px solid rgba(14,165,233,0.22)" };
   }
@@ -6670,7 +6705,7 @@ function UserFunnelPanel({
           <div>
             <div className="cardTitle">User Funnel</div>
             <div className="mutedSmall" style={{ marginTop: 4 }}>
-              Follow the real customer journey from landing → search engagement → search submission → offer → product choice → Razorpay → purchase.
+              Follow the real customer journey from landing → search → either an existing report path or the Custom/Instant fallback → purchase.
             </div>
           </div>
 
@@ -6751,7 +6786,19 @@ function UserFunnelPanel({
             <div className="statValue">{summary.searched}</div>
           </div>
           <div className="statCard">
-            <div className="mutedSmall">Offer shown</div>
+            <div className="mutedSmall">Existing reports shown</div>
+            <div className="statValue">{summary.existingSuggestions}</div>
+          </div>
+          <div className="statCard">
+            <div className="mutedSmall">Existing report selected</div>
+            <div className="statValue">{summary.existingSelected}</div>
+          </div>
+          <div className="statCard">
+            <div className="mutedSmall">Existing report opened</div>
+            <div className="statValue">{summary.existingOpened}</div>
+          </div>
+          <div className="statCard">
+            <div className="mutedSmall">Custom / Instant offer shown</div>
             <div className="statValue">{summary.offerShown}</div>
           </div>
           <div className="statCard">
@@ -6817,7 +6864,19 @@ function UserFunnelPanel({
               <div className="statValue">{trafficSourceSummary.googleSearches}</div>
             </div>
             <div className="statCard">
-              <div className="mutedSmall">Google Ads offer shown</div>
+              <div className="mutedSmall">Google Ads existing reports shown</div>
+              <div className="statValue">{trafficSourceSummary.googleExistingSuggestions}</div>
+            </div>
+            <div className="statCard">
+              <div className="mutedSmall">Google Ads existing selected</div>
+              <div className="statValue">{trafficSourceSummary.googleExistingSelected}</div>
+            </div>
+            <div className="statCard">
+              <div className="mutedSmall">Google Ads existing opened</div>
+              <div className="statValue">{trafficSourceSummary.googleExistingOpened}</div>
+            </div>
+            <div className="statCard">
+              <div className="mutedSmall">Google Ads Custom / Instant offer shown</div>
               <div className="statValue">{trafficSourceSummary.googleOffers}</div>
             </div>
             <div className="statCard">
@@ -6845,9 +6904,24 @@ function UserFunnelPanel({
               <div className="mutedSmall" style={{ marginTop: 4 }}>Google Ads diagnostic rate</div>
             </div>
             <div className="statCard">
-              <div className="mutedSmall">Search submitted → Offer shown</div>
+              <div className="mutedSmall">Search submitted → Existing reports shown</div>
+              <div className="statValue">{trafficSourceSummary.googleSubmittedToExistingRate}%</div>
+              <div className="mutedSmall" style={{ marginTop: 4 }}>Existing-report branch</div>
+            </div>
+            <div className="statCard">
+              <div className="mutedSmall">Existing shown → Selected</div>
+              <div className="statValue">{trafficSourceSummary.googleExistingShownToSelectedRate}%</div>
+              <div className="mutedSmall" style={{ marginTop: 4 }}>Existing-report branch</div>
+            </div>
+            <div className="statCard">
+              <div className="mutedSmall">Existing selected → Opened</div>
+              <div className="statValue">{trafficSourceSummary.googleExistingSelectedToOpenedRate}%</div>
+              <div className="mutedSmall" style={{ marginTop: 4 }}>Existing-report branch</div>
+            </div>
+            <div className="statCard">
+              <div className="mutedSmall">Search submitted → Custom / Instant offer</div>
               <div className="statValue">{trafficSourceSummary.googleSubmittedToOfferRate}%</div>
-              <div className="mutedSmall" style={{ marginTop: 4 }}>Google Ads diagnostic rate</div>
+              <div className="mutedSmall" style={{ marginTop: 4 }}>Fallback branch</div>
             </div>
           </div>
 
@@ -6868,12 +6942,14 @@ function UserFunnelPanel({
       >
         <div className="cardTitleRow">
           <div>
-            <div className="cardTitle">Conversion Funnel</div>
-            <div className="mutedSmall">Unique sessions reaching each stage • submitted searches count as engaged/started for historical compatibility</div>
+            <div className="cardTitle">Common Funnel</div>
+            <div className="mutedSmall">Shared journey before the search result splits into the existing-report path or the Custom/Instant fallback.</div>
           </div>
           <div className="mutedSmall" style={{ textAlign: "right" }}>
             <div>
-              Search submitted → purchase: <span className="mono">{pct(summary.purchases, summary.searched)}</span>
+              Search → existing report opened: <span className="mono">{pct(summary.existingOpened, summary.searched)}</span>
+              {" • "}
+              Search → fallback offer: <span className="mono">{pct(summary.offerShown, summary.searched)}</span>
             </div>
             <div style={{ marginTop: 3, opacity: 0.72 }}>
               {trafficSourceFilter === "google"
@@ -6886,8 +6962,8 @@ function UserFunnelPanel({
         </div>
 
         <div style={{ display: "grid", gap: 9, marginTop: 14 }}>
-          {funnelStages.map((stage, index) => {
-            const previous = index === 0 ? stage.value : funnelStages[index - 1].value;
+          {commonFunnelStages.map((stage, index) => {
+            const previous = index === 0 ? stage.value : commonFunnelStages[index - 1].value;
             const relative = summary.sessions ? Math.max(4, Math.round((stage.value / summary.sessions) * 100)) : 0;
             return (
               <div
@@ -6934,6 +7010,113 @@ function UserFunnelPanel({
               </div>
             );
           })}
+        </div>
+      </section>
+
+      <section
+        className="card glass"
+        style={{
+          border: "1px solid rgba(129,140,248,0.22)",
+          background: "rgba(255,255,255,0.035)",
+        }}
+      >
+        <div className="cardTitleRow" style={{ alignItems: "flex-start", gap: 12 }}>
+          <div>
+            <div className="cardTitle">Search Result Branches</div>
+            <div className="mutedSmall" style={{ marginTop: 4 }}>
+              A submitted search can now follow either the existing-report route or the Custom/Instant fallback route.
+            </div>
+          </div>
+          <div className="mutedSmall" style={{ textAlign: "right" }}>
+            Existing-report purchase tracking will be added on the report-display page next.
+          </div>
+        </div>
+
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "repeat(auto-fit, minmax(340px, 1fr))",
+            gap: 14,
+            marginTop: 14,
+          }}
+        >
+          <div
+            style={{
+              border: "1px solid rgba(129,140,248,0.24)",
+              background: "rgba(99,102,241,0.07)",
+              borderRadius: 16,
+              padding: 14,
+            }}
+          >
+            <div style={{ fontWeight: 800, color: "rgba(224,231,255,0.98)" }}>Existing report path</div>
+            <div className="mutedSmall" style={{ marginTop: 4 }}>
+              Search found catalogue suggestions → visitor selected one → preview successfully opened.
+            </div>
+
+            <div className="statsGrid" style={{ marginTop: 12 }}>
+              <div className="statCard">
+                <div className="mutedSmall">Reports shown</div>
+                <div className="statValue">{summary.existingSuggestions}</div>
+              </div>
+              <div className="statCard">
+                <div className="mutedSmall">Selected</div>
+                <div className="statValue">{summary.existingSelected}</div>
+              </div>
+              <div className="statCard">
+                <div className="mutedSmall">Opened</div>
+                <div className="statValue">{summary.existingOpened}</div>
+              </div>
+            </div>
+
+            <div className="mutedSmall" style={{ marginTop: 10, lineHeight: 1.7 }}>
+              Search → shown: <span className="mono">{pct(summary.existingSuggestions, summary.searched)}</span>
+              {" • "}
+              Shown → selected: <span className="mono">{pct(summary.existingSelected, summary.existingSuggestions)}</span>
+              {" • "}
+              Selected → opened: <span className="mono">{pct(summary.existingOpened, summary.existingSelected)}</span>
+            </div>
+          </div>
+
+          <div
+            style={{
+              border: "1px solid rgba(52,211,153,0.22)",
+              background: "rgba(16,185,129,0.055)",
+              borderRadius: 16,
+              padding: 14,
+            }}
+          >
+            <div style={{ fontWeight: 800, color: "rgba(209,250,229,0.98)" }}>Custom / Instant fallback</div>
+            <div className="mutedSmall" style={{ marginTop: 4 }}>
+              No suitable existing report → visitor sees the Instant vs Custom report offer.
+            </div>
+
+            <div className="statsGrid" style={{ marginTop: 12 }}>
+              <div className="statCard">
+                <div className="mutedSmall">Offer shown</div>
+                <div className="statValue">{summary.offerShown}</div>
+              </div>
+              <div className="statCard">
+                <div className="mutedSmall">Custom clicked</div>
+                <div className="statValue">{summary.customClicked}</div>
+              </div>
+              <div className="statCard">
+                <div className="mutedSmall">Instant clicked</div>
+                <div className="statValue">{summary.instantClicked}</div>
+              </div>
+              <div className="statCard">
+                <div className="mutedSmall">Custom Razorpay opened</div>
+                <div className="statValue">{summary.razorpayOpened}</div>
+              </div>
+            </div>
+
+            <div className="mutedSmall" style={{ marginTop: 10, lineHeight: 1.7 }}>
+              Search → offer: <span className="mono">{pct(summary.offerShown, summary.searched)}</span>
+              {" • "}
+              Offer → Custom: <span className="mono">{pct(summary.customClicked, summary.offerShown)}</span>
+              {" • "}
+              Offer → Instant: <span className="mono">{pct(summary.instantClicked, summary.offerShown)}</span>
+            </div>
+          </div>
         </div>
       </section>
 
@@ -7034,7 +7217,7 @@ function UserFunnelPanel({
           <div>
             <div className="cardTitle">Session Journeys</div>
             <div className="mutedSmall" style={{ marginTop: 4 }}>
-              Search engagement, submitted query, Google Ads attribution, product choice, and the deepest funnel stage reached.
+              Search engagement, submitted query, Google Ads attribution, search-result path, product choice, and the deepest stage reached.
             </div>
           </div>
           <div className="mutedSmall" style={{ textAlign: "right" }}>
@@ -7067,7 +7250,7 @@ function UserFunnelPanel({
                   <th style={{ width: 128 }}>Search stage</th>
                   <th>Source / campaign</th>
                   <th style={{ width: 92 }}>Sample</th>
-                  <th style={{ width: 120 }}>Choice</th>
+                  <th style={{ width: 140 }}>Path / choice</th>
                   <th style={{ width: 100 }}>OTP</th>
                   <th style={{ width: 110 }}>Razorpay</th>
                   <th style={{ width: 132 }}>Outcome</th>
@@ -7255,7 +7438,7 @@ function UserFunnelPanel({
         )}
 
         <div className="mutedSmall" style={{ marginTop: 10 }}>
-          Source: <span className="mono">rbrmain-funnel-events</span>
+          Source: <span className="mono">rbrmain-funnel-events</span> • Existing-report discovery/open tracking enabled
           {data?.event_count !== undefined ? <> • Raw events: <span className="mono">{data.event_count}</span></> : null}
         </div>
       </section>
