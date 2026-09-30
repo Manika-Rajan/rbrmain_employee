@@ -6424,6 +6424,61 @@ function UserFunnelPanel({
     return hasEvent(session, "report_search");
   }
 
+  // A browser session can contain more than one submitted search. The dashboard
+  // is intentionally session-based, so branch metrics must describe only the
+  // latest submitted search in that session. Otherwise one session can be counted
+  // once in the existing-report branch and again in the fallback branch.
+  function getLatestSearchAttempt(session = {}) {
+    const journey = [...(session?.journey || [])].sort((a, b) =>
+      String(a?.event_ts || "").localeCompare(String(b?.event_ts || ""))
+    );
+
+    let lastSearchIndex = -1;
+    journey.forEach((step, index) => {
+      if (step?.event_name === "report_search") lastSearchIndex = index;
+    });
+
+    return lastSearchIndex >= 0 ? journey.slice(lastSearchIndex) : [];
+  }
+
+  function latestSearchHasEvent(session = {}, eventName = "") {
+    if (!eventName) return false;
+    return getLatestSearchAttempt(session).some((step) => step?.event_name === eventName);
+  }
+
+  function getLatestSearchBranch(session = {}) {
+    const attempt = getLatestSearchAttempt(session);
+    if (!attempt.length) return "none";
+
+    // Start with a submitted-but-not-yet-classified search. As events progress,
+    // the most recent search-result branch wins.
+    let branch = "submitted";
+
+    attempt.forEach((step) => {
+      const name = step?.event_name;
+
+      if (
+        [
+          "existing_report_suggestions_shown",
+          "existing_report_selected",
+          "existing_report_opened",
+          "existing_report_preview_unavailable",
+          "existing_report_open_error",
+        ].includes(name)
+      ) {
+        branch = "existing";
+      } else if (name === "prebook_offer_shown") {
+        branch = "offer";
+      } else if (name === "search_generic_hint_shown") {
+        branch = "generic";
+      } else if (name === "search_error") {
+        branch = "error";
+      }
+    });
+
+    return branch;
+  }
+
   const summary = useMemo(() => {
     const result = {
       sessions: visibleSessions.length,
@@ -6452,13 +6507,30 @@ function UserFunnelPanel({
       if (reachedSearchEngaged(session)) result.searchEngaged += 1;
       if (reachedSearchStarted(session)) result.searchStarted += 1;
       if (reachedSearchSubmitted(session)) result.searched += 1;
-      if (hasEvent(session, "existing_report_suggestions_shown")) result.existingSuggestions += 1;
-      if (hasEvent(session, "existing_report_selected")) result.existingSelected += 1;
-      if (hasEvent(session, "existing_report_opened")) result.existingOpened += 1;
-      if (hasEvent(session, "prebook_offer_shown")) result.offerShown += 1;
-      if (session.sample_viewed || hasEvent(session, "custom_sample_viewed")) result.sampleViewed += 1;
-      if (session.instant_clicked || hasEvent(session, "instant_order_clicked")) result.instantClicked += 1;
-      if (session.custom_clicked || hasEvent(session, "prebook_order_clicked")) result.customClicked += 1;
+
+      const latestBranch = getLatestSearchBranch(session);
+
+      // Branch counters are mutually exclusive at the session level: only the
+      // outcome of the latest submitted search is counted.
+      if (latestBranch === "existing") {
+        if (latestSearchHasEvent(session, "existing_report_suggestions_shown")) {
+          result.existingSuggestions += 1;
+        }
+        if (latestSearchHasEvent(session, "existing_report_selected")) {
+          result.existingSelected += 1;
+        }
+        if (latestSearchHasEvent(session, "existing_report_opened")) {
+          result.existingOpened += 1;
+        }
+      }
+
+      if (latestBranch === "offer") {
+        if (latestSearchHasEvent(session, "prebook_offer_shown")) result.offerShown += 1;
+        if (latestSearchHasEvent(session, "custom_sample_viewed")) result.sampleViewed += 1;
+        if (latestSearchHasEvent(session, "instant_order_clicked")) result.instantClicked += 1;
+        if (latestSearchHasEvent(session, "prebook_order_clicked")) result.customClicked += 1;
+      }
+
       if (session.otp_verified || hasEvent(session, "otp_verified")) result.otpVerified += 1;
       if (session.identity_ready || hasEvent(session, "identity_ready")) result.identityReady += 1;
       if (session.checkout_started || hasEvent(session, "checkout_started")) result.checkoutStarted += 1;
@@ -6483,16 +6555,24 @@ function UserFunnelPanel({
     const googleSearchEngaged = googleSessions.filter((session) => reachedSearchEngaged(session));
     const googleSearchStarted = googleSessions.filter((session) => reachedSearchStarted(session));
     const googleSearches = googleSessions.filter((session) => reachedSearchSubmitted(session));
-    const googleExistingSuggestions = googleSessions.filter((session) =>
-      hasEvent(session, "existing_report_suggestions_shown")
+    const googleExistingBranch = googleSearches.filter(
+      (session) => getLatestSearchBranch(session) === "existing"
     );
-    const googleExistingSelected = googleSessions.filter((session) =>
-      hasEvent(session, "existing_report_selected")
+    const googleOfferBranch = googleSearches.filter(
+      (session) => getLatestSearchBranch(session) === "offer"
     );
-    const googleExistingOpened = googleSessions.filter((session) =>
-      hasEvent(session, "existing_report_opened")
+    const googleExistingSuggestions = googleExistingBranch.filter((session) =>
+      latestSearchHasEvent(session, "existing_report_suggestions_shown")
     );
-    const googleOffers = googleSessions.filter((session) => hasEvent(session, "prebook_offer_shown"));
+    const googleExistingSelected = googleExistingBranch.filter((session) =>
+      latestSearchHasEvent(session, "existing_report_selected")
+    );
+    const googleExistingOpened = googleExistingBranch.filter((session) =>
+      latestSearchHasEvent(session, "existing_report_opened")
+    );
+    const googleOffers = googleOfferBranch.filter((session) =>
+      latestSearchHasEvent(session, "prebook_offer_shown")
+    );
     const googlePurchases = googleSessions.filter(
       (session) => session.payment_success || hasEvent(session, "payment_success")
     );
@@ -6539,14 +6619,16 @@ function UserFunnelPanel({
   }, [baseSessions]);
 
   const sampleEffectiveness = useMemo(() => {
-    const offerSessions = visibleSessions.filter((s) => hasEvent(s, "prebook_offer_shown"));
-    const sampleViewers = offerSessions.filter((s) => s.sample_viewed || hasEvent(s, "custom_sample_viewed"));
-    const nonSampleViewers = offerSessions.filter((s) => !(s.sample_viewed || hasEvent(s, "custom_sample_viewed")));
+    const offerSessions = visibleSessions.filter(
+      (s) => getLatestSearchBranch(s) === "offer" && latestSearchHasEvent(s, "prebook_offer_shown")
+    );
+    const sampleViewers = offerSessions.filter((s) => latestSearchHasEvent(s, "custom_sample_viewed"));
+    const nonSampleViewers = offerSessions.filter((s) => !latestSearchHasEvent(s, "custom_sample_viewed"));
 
-    const sampleCustom = sampleViewers.filter((s) => s.custom_clicked || hasEvent(s, "prebook_order_clicked"));
-    const samplePaid = sampleViewers.filter((s) => s.payment_success || hasEvent(s, "payment_success"));
-    const nonSampleCustom = nonSampleViewers.filter((s) => s.custom_clicked || hasEvent(s, "prebook_order_clicked"));
-    const nonSamplePaid = nonSampleViewers.filter((s) => s.payment_success || hasEvent(s, "payment_success"));
+    const sampleCustom = sampleViewers.filter((s) => latestSearchHasEvent(s, "prebook_order_clicked"));
+    const samplePaid = sampleViewers.filter((s) => latestSearchHasEvent(s, "payment_success"));
+    const nonSampleCustom = nonSampleViewers.filter((s) => latestSearchHasEvent(s, "prebook_order_clicked"));
+    const nonSamplePaid = nonSampleViewers.filter((s) => latestSearchHasEvent(s, "payment_success"));
 
     return {
       sampleViewers: sampleViewers.length,
@@ -6559,9 +6641,11 @@ function UserFunnelPanel({
   }, [visibleSessions]);
 
   const productChoice = useMemo(() => {
-    const offerSessions = visibleSessions.filter((s) => hasEvent(s, "prebook_offer_shown"));
-    const instant = offerSessions.filter((s) => s.instant_clicked || hasEvent(s, "instant_order_clicked"));
-    const custom = offerSessions.filter((s) => s.custom_clicked || hasEvent(s, "prebook_order_clicked"));
+    const offerSessions = visibleSessions.filter(
+      (s) => getLatestSearchBranch(s) === "offer" && latestSearchHasEvent(s, "prebook_offer_shown")
+    );
+    const instant = offerSessions.filter((s) => latestSearchHasEvent(s, "instant_order_clicked"));
+    const custom = offerSessions.filter((s) => latestSearchHasEvent(s, "prebook_order_clicked"));
     const acted = new Set([...instant, ...custom].map((s) => s.session_id));
     return {
       offers: offerSessions.length,
@@ -6618,18 +6702,23 @@ function UserFunnelPanel({
   }
 
   function getChoice(session = {}) {
-    const existingOpened = hasEvent(session, "existing_report_opened");
-    const existingSelected = hasEvent(session, "existing_report_selected");
-    const existingShown = hasEvent(session, "existing_report_suggestions_shown");
-    const choseInstant = session.instant_clicked || hasEvent(session, "instant_order_clicked");
-    const choseCustom = session.custom_clicked || hasEvent(session, "prebook_order_clicked");
+    const latestBranch = getLatestSearchBranch(session);
 
-    if (existingOpened) return "Existing opened";
-    if (existingSelected) return "Existing selected";
-    if (existingShown) return "Existing shown";
-    if (choseInstant && choseCustom) return "Instant + Custom";
-    if (choseCustom) return "Custom";
-    if (choseInstant) return "Instant";
+    if (latestBranch === "existing") {
+      if (latestSearchHasEvent(session, "existing_report_opened")) return "Existing opened";
+      if (latestSearchHasEvent(session, "existing_report_selected")) return "Existing selected";
+      if (latestSearchHasEvent(session, "existing_report_suggestions_shown")) return "Existing shown";
+      return "Existing path";
+    }
+
+    if (latestBranch === "offer") {
+      const choseInstant = latestSearchHasEvent(session, "instant_order_clicked");
+      const choseCustom = latestSearchHasEvent(session, "prebook_order_clicked");
+      if (choseInstant && choseCustom) return "Instant + Custom";
+      if (choseCustom) return "Custom";
+      if (choseInstant) return "Instant";
+    }
+
     return "No choice";
   }
 
@@ -6641,17 +6730,24 @@ function UserFunnelPanel({
   }
 
   function getOutcome(session = {}) {
-    if (session.payment_success || hasEvent(session, "payment_success")) return "Paid";
-    if (session.payment_cancelled || hasEvent(session, "payment_cancelled")) return "Cancelled";
-    if (session.razorpay_opened || hasEvent(session, "razorpay_opened")) return "At Razorpay";
-    if (session.checkout_started || hasEvent(session, "checkout_started")) return "Checkout";
-    if (session.identity_ready || hasEvent(session, "identity_ready")) return "Identity ready";
-    if (session.custom_clicked || hasEvent(session, "prebook_order_clicked")) return "Custom clicked";
-    if (session.instant_clicked || hasEvent(session, "instant_order_clicked")) return "Instant clicked";
-    if (hasEvent(session, "existing_report_opened")) return "Existing report opened";
-    if (hasEvent(session, "existing_report_selected")) return "Existing report selected";
-    if (hasEvent(session, "existing_report_suggestions_shown")) return "Existing reports shown";
-    if (hasEvent(session, "prebook_offer_shown")) return "Offer viewed";
+    const latestAttempt = getLatestSearchAttempt(session);
+    const hasLatest = (eventName) => latestAttempt.some((step) => step?.event_name === eventName);
+
+    if (hasLatest("payment_success")) return "Paid";
+    if (hasLatest("payment_cancelled")) return "Cancelled";
+    if (hasLatest("razorpay_opened")) return "At Razorpay";
+    if (hasLatest("checkout_started")) return "Checkout";
+    if (hasLatest("identity_ready")) return "Identity ready";
+    if (hasLatest("prebook_order_clicked")) return "Custom clicked";
+    if (hasLatest("instant_order_clicked")) return "Instant clicked";
+    if (hasLatest("existing_report_opened")) return "Existing report opened";
+    if (hasLatest("existing_report_preview_unavailable")) return "Existing preview unavailable";
+    if (hasLatest("existing_report_open_error")) return "Existing open error";
+    if (hasLatest("existing_report_selected")) return "Existing report selected";
+    if (hasLatest("existing_report_suggestions_shown")) return "Existing reports shown";
+    if (hasLatest("prebook_offer_shown")) return "Offer viewed";
+    if (hasLatest("search_generic_hint_shown")) return "Generic search guidance";
+    if (hasLatest("search_error")) return "Search error";
     if (reachedSearchSubmitted(session)) return "Search submitted";
     if (hasEvent(session, "search_started")) return "Search started";
     if (hasEvent(session, "search_box_focused")) return "Search engaged";
@@ -6667,6 +6763,12 @@ function UserFunnelPanel({
     }
     if (["At Razorpay", "Checkout"].includes(outcome)) {
       return { color: "rgba(254,215,170,0.98)", background: "rgba(249,115,22,0.12)", border: "1px solid rgba(249,115,22,0.26)" };
+    }
+    if (["Search error", "Existing open error"].includes(outcome)) {
+      return { color: "rgba(254,202,202,0.98)", background: "rgba(239,68,68,0.12)", border: "1px solid rgba(239,68,68,0.26)" };
+    }
+    if (["Generic search guidance", "Existing preview unavailable"].includes(outcome)) {
+      return { color: "rgba(254,240,138,0.98)", background: "rgba(234,179,8,0.10)", border: "1px solid rgba(234,179,8,0.24)" };
     }
     if (String(outcome || "").startsWith("Existing report") || outcome === "Existing reports shown") {
       return { color: "rgba(224,231,255,0.98)", background: "rgba(99,102,241,0.13)", border: "1px solid rgba(129,140,248,0.28)" };
@@ -7024,7 +7126,7 @@ function UserFunnelPanel({
           <div>
             <div className="cardTitle">Search Result Branches</div>
             <div className="mutedSmall" style={{ marginTop: 4 }}>
-              A submitted search can now follow either the existing-report route or the Custom/Instant fallback route.
+              Each session is assigned to the outcome of its latest submitted search, so branch counts do not overlap.
             </div>
           </div>
           <div className="mutedSmall" style={{ textAlign: "right" }}>
