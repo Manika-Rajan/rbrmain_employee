@@ -6446,6 +6446,36 @@ function UserFunnelPanel({
     return getLatestSearchAttempt(session).some((step) => step?.event_name === eventName);
   }
 
+  function getLatestSearchEvent(session = {}, eventName = "") {
+    if (!eventName) return null;
+    const matches = getLatestSearchAttempt(session).filter(
+      (step) => step?.event_name === eventName
+    );
+    return matches.length ? matches[matches.length - 1] : null;
+  }
+
+  function isTestPaymentEvent(event = {}) {
+    return Boolean(
+      event?.is_test_payment === true ||
+        event?.is_test_payment === "true" ||
+        event?.test === true ||
+        event?.test === "true" ||
+        event?.is_test === true ||
+        event?.is_test === "true"
+    );
+  }
+
+  function existingPurchaseValue(session = {}) {
+    const event = getLatestSearchEvent(session, "existing_report_purchase");
+    if (!event || isTestPaymentEvent(event)) return 0;
+
+    const direct = toAmountNumber(event?.paid_value ?? event?.displayed_price);
+    if (direct > 0) return direct;
+
+    const minor = Number(event?.amount_minor || 0);
+    return Number.isFinite(minor) && minor > 0 ? minor / 100 : 0;
+  }
+
   function getLatestSearchBranch(session = {}) {
     const attempt = getLatestSearchAttempt(session);
     if (!attempt.length) return "none";
@@ -6489,6 +6519,15 @@ function UserFunnelPanel({
       existingSuggestions: 0,
       existingSelected: 0,
       existingOpened: 0,
+      existingCheckoutStarted: 0,
+      existingPaymentPageViewed: 0,
+      existingPayNowClicked: 0,
+      existingOrderCreated: 0,
+      existingRazorpayOpened: 0,
+      existingPaymentCancelled: 0,
+      existingPaymentFailed: 0,
+      existingPurchases: 0,
+      existingTestPurchases: 0,
       offerShown: 0,
       sampleViewed: 0,
       instantClicked: 0,
@@ -6522,6 +6561,36 @@ function UserFunnelPanel({
         if (latestSearchHasEvent(session, "existing_report_opened")) {
           result.existingOpened += 1;
         }
+        if (latestSearchHasEvent(session, "existing_report_checkout_started")) {
+          result.existingCheckoutStarted += 1;
+        }
+        if (latestSearchHasEvent(session, "existing_report_payment_page_viewed")) {
+          result.existingPaymentPageViewed += 1;
+        }
+        if (latestSearchHasEvent(session, "existing_report_pay_now_clicked")) {
+          result.existingPayNowClicked += 1;
+        }
+        if (latestSearchHasEvent(session, "existing_report_order_created")) {
+          result.existingOrderCreated += 1;
+        }
+        if (latestSearchHasEvent(session, "existing_report_razorpay_opened")) {
+          result.existingRazorpayOpened += 1;
+        }
+        if (latestSearchHasEvent(session, "existing_report_payment_cancelled")) {
+          result.existingPaymentCancelled += 1;
+        }
+        if (latestSearchHasEvent(session, "existing_report_payment_failed")) {
+          result.existingPaymentFailed += 1;
+        }
+
+        const existingPurchase = getLatestSearchEvent(session, "existing_report_purchase");
+        if (existingPurchase) {
+          if (isTestPaymentEvent(existingPurchase)) {
+            result.existingTestPurchases += 1;
+          } else {
+            result.existingPurchases += 1;
+          }
+        }
       }
 
       if (latestBranch === "offer") {
@@ -6533,14 +6602,28 @@ function UserFunnelPanel({
 
       if (session.otp_verified || hasEvent(session, "otp_verified")) result.otpVerified += 1;
       if (session.identity_ready || hasEvent(session, "identity_ready")) result.identityReady += 1;
-      if (session.checkout_started || hasEvent(session, "checkout_started")) result.checkoutStarted += 1;
-      if (session.razorpay_opened || hasEvent(session, "razorpay_opened")) result.razorpayOpened += 1;
-      if (session.payment_cancelled || hasEvent(session, "payment_cancelled")) result.cancelled += 1;
 
-      const paid = Boolean(session.payment_success || hasEvent(session, "payment_success"));
-      if (paid) {
+      const fallbackCheckout = session.checkout_started || hasEvent(session, "checkout_started");
+      const existingCheckout = latestSearchHasEvent(session, "existing_report_checkout_started");
+      if (fallbackCheckout || existingCheckout) result.checkoutStarted += 1;
+
+      const fallbackRazorpay = session.razorpay_opened || hasEvent(session, "razorpay_opened");
+      const existingRazorpay = latestSearchHasEvent(session, "existing_report_razorpay_opened");
+      if (fallbackRazorpay || existingRazorpay) result.razorpayOpened += 1;
+
+      const fallbackCancelled = session.payment_cancelled || hasEvent(session, "payment_cancelled");
+      const existingCancelled = latestSearchHasEvent(session, "existing_report_payment_cancelled");
+      if (fallbackCancelled || existingCancelled) result.cancelled += 1;
+
+      const fallbackPaid = Boolean(session.payment_success || hasEvent(session, "payment_success"));
+      const existingPurchaseEvent = getLatestSearchEvent(session, "existing_report_purchase");
+      const existingPaid = Boolean(existingPurchaseEvent && !isTestPaymentEvent(existingPurchaseEvent));
+
+      if (fallbackPaid || existingPaid) {
         result.purchases += 1;
-        result.revenue += toAmountNumber(session.paid_value);
+        result.revenue += fallbackPaid
+          ? toAmountNumber(session.paid_value)
+          : existingPurchaseValue(session);
       }
     });
 
@@ -6570,12 +6653,27 @@ function UserFunnelPanel({
     const googleExistingOpened = googleExistingBranch.filter((session) =>
       latestSearchHasEvent(session, "existing_report_opened")
     );
+    const googleExistingCheckoutStarted = googleExistingBranch.filter((session) =>
+      latestSearchHasEvent(session, "existing_report_checkout_started")
+    );
+    const googleExistingPaymentPageViewed = googleExistingBranch.filter((session) =>
+      latestSearchHasEvent(session, "existing_report_payment_page_viewed")
+    );
+    const googleExistingRazorpayOpened = googleExistingBranch.filter((session) =>
+      latestSearchHasEvent(session, "existing_report_razorpay_opened")
+    );
+    const googleExistingPurchases = googleExistingBranch.filter((session) => {
+      const purchaseEvent = getLatestSearchEvent(session, "existing_report_purchase");
+      return Boolean(purchaseEvent && !isTestPaymentEvent(purchaseEvent));
+    });
     const googleOffers = googleOfferBranch.filter((session) =>
       latestSearchHasEvent(session, "prebook_offer_shown")
     );
-    const googlePurchases = googleSessions.filter(
-      (session) => session.payment_success || hasEvent(session, "payment_success")
-    );
+    const googlePurchases = googleSessions.filter((session) => {
+      if (session.payment_success || hasEvent(session, "payment_success")) return true;
+      const purchaseEvent = getLatestSearchEvent(session, "existing_report_purchase");
+      return Boolean(purchaseEvent && !isTestPaymentEvent(purchaseEvent));
+    });
 
     const landingDenominator = googleLandings.length || googleSessions.length;
 
@@ -6589,6 +6687,10 @@ function UserFunnelPanel({
       googleExistingSuggestions: googleExistingSuggestions.length,
       googleExistingSelected: googleExistingSelected.length,
       googleExistingOpened: googleExistingOpened.length,
+      googleExistingCheckoutStarted: googleExistingCheckoutStarted.length,
+      googleExistingPaymentPageViewed: googleExistingPaymentPageViewed.length,
+      googleExistingRazorpayOpened: googleExistingRazorpayOpened.length,
+      googleExistingPurchases: googleExistingPurchases.length,
       googleOffers: googleOffers.length,
       googlePurchases: googlePurchases.length,
       googleLandingToEngagedRate: landingDenominator
@@ -6605,6 +6707,15 @@ function UserFunnelPanel({
         : 0,
       googleExistingSelectedToOpenedRate: googleExistingSelected.length
         ? Math.round((googleExistingOpened.length / googleExistingSelected.length) * 100)
+        : 0,
+      googleExistingOpenedToCheckoutRate: googleExistingOpened.length
+        ? Math.round((googleExistingCheckoutStarted.length / googleExistingOpened.length) * 100)
+        : 0,
+      googleExistingCheckoutToRazorpayRate: googleExistingCheckoutStarted.length
+        ? Math.round((googleExistingRazorpayOpened.length / googleExistingCheckoutStarted.length) * 100)
+        : 0,
+      googleExistingRazorpayToPurchaseRate: googleExistingRazorpayOpened.length
+        ? Math.round((googleExistingPurchases.length / googleExistingRazorpayOpened.length) * 100)
         : 0,
       googleSubmittedToOfferRate: googleSearches.length
         ? Math.round((googleOffers.length / googleSearches.length) * 100)
@@ -6733,6 +6844,18 @@ function UserFunnelPanel({
     const latestAttempt = getLatestSearchAttempt(session);
     const hasLatest = (eventName) => latestAttempt.some((step) => step?.event_name === eventName);
 
+    const existingPurchase = getLatestSearchEvent(session, "existing_report_purchase");
+    if (existingPurchase) {
+      return isTestPaymentEvent(existingPurchase) ? "Test purchase" : "Paid";
+    }
+    if (hasLatest("existing_report_payment_failed")) return "Payment failed";
+    if (hasLatest("existing_report_payment_cancelled")) return "Cancelled";
+    if (hasLatest("existing_report_razorpay_opened")) return "At Razorpay";
+    if (hasLatest("existing_report_razorpay_open_attempt")) return "Opening Razorpay";
+    if (hasLatest("existing_report_order_created")) return "Order created";
+    if (hasLatest("existing_report_pay_now_clicked")) return "Pay now clicked";
+    if (hasLatest("existing_report_payment_page_viewed")) return "Payment page";
+    if (hasLatest("existing_report_checkout_started")) return "Checkout";
     if (hasLatest("payment_success")) return "Paid";
     if (hasLatest("payment_cancelled")) return "Cancelled";
     if (hasLatest("razorpay_opened")) return "At Razorpay";
@@ -6758,10 +6881,13 @@ function UserFunnelPanel({
     if (outcome === "Paid") {
       return { color: "rgba(187,247,208,0.98)", background: "rgba(34,197,94,0.14)", border: "1px solid rgba(34,197,94,0.30)" };
     }
-    if (outcome === "Cancelled") {
+    if (["Cancelled", "Payment failed"].includes(outcome)) {
       return { color: "rgba(254,202,202,0.98)", background: "rgba(239,68,68,0.12)", border: "1px solid rgba(239,68,68,0.26)" };
     }
-    if (["At Razorpay", "Checkout"].includes(outcome)) {
+    if (outcome === "Test purchase") {
+      return { color: "rgba(254,240,138,0.98)", background: "rgba(234,179,8,0.10)", border: "1px solid rgba(234,179,8,0.24)" };
+    }
+    if (["At Razorpay", "Opening Razorpay", "Order created", "Pay now clicked", "Payment page", "Checkout"].includes(outcome)) {
       return { color: "rgba(254,215,170,0.98)", background: "rgba(249,115,22,0.12)", border: "1px solid rgba(249,115,22,0.26)" };
     }
     if (["Search error", "Existing open error"].includes(outcome)) {
@@ -6912,6 +7038,10 @@ function UserFunnelPanel({
             <div className="statValue">{summary.customClicked}</div>
           </div>
           <div className="statCard">
+            <div className="mutedSmall">Checkout started</div>
+            <div className="statValue">{summary.checkoutStarted}</div>
+          </div>
+          <div className="statCard">
             <div className="mutedSmall">Razorpay opened</div>
             <div className="statValue">{summary.razorpayOpened}</div>
           </div>
@@ -6978,6 +7108,14 @@ function UserFunnelPanel({
               <div className="statValue">{trafficSourceSummary.googleExistingOpened}</div>
             </div>
             <div className="statCard">
+              <div className="mutedSmall">Google Ads existing checkout started</div>
+              <div className="statValue">{trafficSourceSummary.googleExistingCheckoutStarted}</div>
+            </div>
+            <div className="statCard">
+              <div className="mutedSmall">Google Ads existing Razorpay opened</div>
+              <div className="statValue">{trafficSourceSummary.googleExistingRazorpayOpened}</div>
+            </div>
+            <div className="statCard">
               <div className="mutedSmall">Google Ads Custom / Instant offer shown</div>
               <div className="statValue">{trafficSourceSummary.googleOffers}</div>
             </div>
@@ -7018,6 +7156,21 @@ function UserFunnelPanel({
             <div className="statCard">
               <div className="mutedSmall">Existing selected → Opened</div>
               <div className="statValue">{trafficSourceSummary.googleExistingSelectedToOpenedRate}%</div>
+              <div className="mutedSmall" style={{ marginTop: 4 }}>Existing-report branch</div>
+            </div>
+            <div className="statCard">
+              <div className="mutedSmall">Existing opened → Checkout</div>
+              <div className="statValue">{trafficSourceSummary.googleExistingOpenedToCheckoutRate}%</div>
+              <div className="mutedSmall" style={{ marginTop: 4 }}>Existing-report branch</div>
+            </div>
+            <div className="statCard">
+              <div className="mutedSmall">Existing checkout → Razorpay</div>
+              <div className="statValue">{trafficSourceSummary.googleExistingCheckoutToRazorpayRate}%</div>
+              <div className="mutedSmall" style={{ marginTop: 4 }}>Existing-report branch</div>
+            </div>
+            <div className="statCard">
+              <div className="mutedSmall">Existing Razorpay → Purchase</div>
+              <div className="statValue">{trafficSourceSummary.googleExistingRazorpayToPurchaseRate}%</div>
               <div className="mutedSmall" style={{ marginTop: 4 }}>Existing-report branch</div>
             </div>
             <div className="statCard">
@@ -7130,7 +7283,7 @@ function UserFunnelPanel({
             </div>
           </div>
           <div className="mutedSmall" style={{ textAlign: "right" }}>
-            Existing-report purchase tracking will be added on the report-display page next.
+            Existing-report checkout and purchase tracking is enabled end-to-end.
           </div>
         </div>
 
@@ -7168,6 +7321,26 @@ function UserFunnelPanel({
                 <div className="mutedSmall">Opened</div>
                 <div className="statValue">{summary.existingOpened}</div>
               </div>
+              <div className="statCard">
+                <div className="mutedSmall">Checkout started</div>
+                <div className="statValue">{summary.existingCheckoutStarted}</div>
+              </div>
+              <div className="statCard">
+                <div className="mutedSmall">Payment page</div>
+                <div className="statValue">{summary.existingPaymentPageViewed}</div>
+              </div>
+              <div className="statCard">
+                <div className="mutedSmall">Pay now clicked</div>
+                <div className="statValue">{summary.existingPayNowClicked}</div>
+              </div>
+              <div className="statCard">
+                <div className="mutedSmall">Razorpay opened</div>
+                <div className="statValue">{summary.existingRazorpayOpened}</div>
+              </div>
+              <div className="statCard">
+                <div className="mutedSmall">Purchases</div>
+                <div className="statValue">{summary.existingPurchases}</div>
+              </div>
             </div>
 
             <div className="mutedSmall" style={{ marginTop: 10, lineHeight: 1.7 }}>
@@ -7176,6 +7349,18 @@ function UserFunnelPanel({
               Shown → selected: <span className="mono">{pct(summary.existingSelected, summary.existingSuggestions)}</span>
               {" • "}
               Selected → opened: <span className="mono">{pct(summary.existingOpened, summary.existingSelected)}</span>
+              {" • "}
+              Opened → checkout: <span className="mono">{pct(summary.existingCheckoutStarted, summary.existingOpened)}</span>
+              {" • "}
+              Checkout → Razorpay: <span className="mono">{pct(summary.existingRazorpayOpened, summary.existingCheckoutStarted)}</span>
+              {" • "}
+              Razorpay → purchase: <span className="mono">{pct(summary.existingPurchases, summary.existingRazorpayOpened)}</span>
+              {summary.existingTestPurchases ? (
+                <>
+                  {" • "}
+                  Test purchases excluded: <span className="mono">{summary.existingTestPurchases}</span>
+                </>
+              ) : null}
             </div>
           </div>
 
@@ -7369,7 +7554,10 @@ function UserFunnelPanel({
                   const source = getSource(session);
                   const hasOtp = session.otp_verified || hasEvent(session, "otp_verified");
                   const hasIdentity = session.identity_ready || hasEvent(session, "identity_ready");
-                  const hasRazorpay = session.razorpay_opened || hasEvent(session, "razorpay_opened");
+                  const hasRazorpay =
+                    session.razorpay_opened ||
+                    hasEvent(session, "razorpay_opened") ||
+                    latestSearchHasEvent(session, "existing_report_razorpay_opened");
                   const sample = session.sample_viewed || hasEvent(session, "custom_sample_viewed");
                   const searchStage = getSearchStage(session);
 
@@ -7482,7 +7670,13 @@ function UserFunnelPanel({
                                 </div>
                                 <div>
                                   <div className="mutedSmall">Revenue</div>
-                                  <div className="mono">{formatInr(session.paid_value || 0)}</div>
+                                  <div className="mono">
+                                    {formatInr(
+                                      toAmountNumber(session.paid_value) > 0
+                                        ? session.paid_value
+                                        : existingPurchaseValue(session)
+                                    )}
+                                  </div>
                                 </div>
                               </div>
 
@@ -7540,7 +7734,7 @@ function UserFunnelPanel({
         )}
 
         <div className="mutedSmall" style={{ marginTop: 10 }}>
-          Source: <span className="mono">rbrmain-funnel-events</span> • Existing-report discovery/open tracking enabled
+          Source: <span className="mono">rbrmain-funnel-events</span> • Existing-report discovery, checkout, Razorpay, and purchase tracking enabled
           {data?.event_count !== undefined ? <> • Raw events: <span className="mono">{data.event_count}</span></> : null}
         </div>
       </section>
