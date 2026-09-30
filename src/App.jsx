@@ -6535,6 +6535,7 @@ function UserFunnelPanel({
       otpVerified: 0,
       identityReady: 0,
       checkoutStarted: 0,
+      fallbackRazorpayOpened: 0,
       razorpayOpened: 0,
       cancelled: 0,
       purchases: 0,
@@ -6609,6 +6610,11 @@ function UserFunnelPanel({
 
       const fallbackRazorpay = session.razorpay_opened || hasEvent(session, "razorpay_opened");
       const existingRazorpay = latestSearchHasEvent(session, "existing_report_razorpay_opened");
+
+      if (latestBranch === "offer" && fallbackRazorpay) {
+        result.fallbackRazorpayOpened += 1;
+      }
+
       if (fallbackRazorpay || existingRazorpay) result.razorpayOpened += 1;
 
       const fallbackCancelled = session.payment_cancelled || hasEvent(session, "payment_cancelled");
@@ -7392,7 +7398,7 @@ function UserFunnelPanel({
               </div>
               <div className="statCard">
                 <div className="mutedSmall">Custom Razorpay opened</div>
-                <div className="statValue">{summary.razorpayOpened}</div>
+                <div className="statValue">{summary.fallbackRazorpayOpened}</div>
               </div>
             </div>
 
