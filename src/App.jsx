@@ -6360,6 +6360,7 @@ function UserFunnelPanel({
 
     const knownInternalQueries = new Set([
       "test1234",
+      "test12345",
       "attrtest123",
       "funnel tracker test",
       "funnelstagetest",
@@ -6527,20 +6528,62 @@ function UserFunnelPanel({
 
       const eventTs = String(step?.event_ts || "");
       const topic = getChoiceEventTopic(step);
+      const eventName = String(step?.event_name || "");
       const last = history[history.length - 1];
       const currentMs = eventTs ? new Date(eventTs).getTime() : NaN;
       const lastMs = last?.event_ts ? new Date(last.event_ts).getTime() : NaN;
-      const nearDuplicate =
+      const secondsApart =
+        Number.isFinite(currentMs) && Number.isFinite(lastMs)
+          ? Math.abs(currentMs - lastMs)
+          : Infinity;
+
+      // The website intentionally emits BOTH:
+      // 1) landing_path_selected (generic reliability event)
+      // 2) landing_<product>_selected (authoritative product-specific event)
+      //
+      // They describe the SAME click. If the backend altered/filled
+      // selected_product on the generic row, the old dashboard could falsely
+      // display "Existing report → Instant" for one Instant click.
+      //
+      // Product-specific event names are authoritative. If one follows a
+      // generic landing event within 5 seconds, replace the generic row rather
+      // than treating it as a product switch.
+      const isSpecificLandingEvent = [
+        "landing_existing_report_selected",
+        "landing_instant_selected",
+        "landing_custom_selected",
+      ].includes(eventName);
+
+      if (
+        isSpecificLandingEvent &&
+        last?.source === "landing_generic" &&
+        secondsApart <= 5000
+      ) {
+        history[history.length - 1] = {
+          choice,
+          label: landingChoiceLabel(choice),
+          source: "landing",
+          event_name: eventName,
+          event_ts: eventTs || last.event_ts,
+          topic: topic || last.topic || "",
+        };
+        return;
+      }
+
+      const sameHumanDecision =
         last &&
         last.choice === choice &&
-        last.source === source &&
-        Number.isFinite(currentMs) &&
-        Number.isFinite(lastMs) &&
-        Math.abs(currentMs - lastMs) <= 3000;
+        ["landing", "landing_generic"].includes(last.source) &&
+        ["landing", "landing_generic"].includes(source) &&
+        secondsApart <= 5000;
 
-      if (nearDuplicate) {
+      if (sameHumanDecision) {
         if (!last.topic && topic) last.topic = topic;
         if (!last.event_ts && eventTs) last.event_ts = eventTs;
+        if (isSpecificLandingEvent) {
+          last.source = "landing";
+          last.event_name = eventName;
+        }
         return;
       }
 
@@ -6548,6 +6591,7 @@ function UserFunnelPanel({
         choice,
         label: landingChoiceLabel(choice),
         source,
+        event_name: eventName,
         event_ts: eventTs,
         topic,
       });
@@ -6601,7 +6645,7 @@ function UserFunnelPanel({
 
       if (eventName === "landing_path_selected") {
         fallbackOfferActive = false;
-        pushChoice(getLandingChoiceFromEvent(step), step, "landing");
+        pushChoice(getLandingChoiceFromEvent(step), step, "landing_generic");
         return;
       }
 
@@ -7699,7 +7743,7 @@ function UserFunnelPanel({
             <div>
               <div className="cardTitle" style={{ fontSize: 14 }}>Choice History</div>
               <div className="mutedSmall" style={{ marginTop: 4 }}>
-                Every recorded product decision in chronological order. This preserves switches such as Instant → Custom instead of keeping only the final choice.
+                Every distinct product decision in chronological order. The generic + product-specific tracking pair from one click is de-duplicated, while real switches such as Instant → Custom are preserved.
               </div>
             </div>
             <div className="mutedSmall" style={{ textAlign: "right" }}>
