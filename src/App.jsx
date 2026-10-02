@@ -6405,6 +6405,39 @@ function UserFunnelPanel({
     return (session?.journey || []).some((step) => step?.event_name === eventName);
   }
 
+  function getLandingChoiceFromEvent(step = {}) {
+    const raw = normalize(
+      step?.selected_product ||
+        step?.selectedProduct ||
+        step?.extra?.selected_product ||
+        step?.extra?.selectedProduct ||
+        ""
+    );
+
+    if (["existing_report", "catalogue_report", "existing"].includes(raw)) {
+      return "existing_report";
+    }
+    if (["instant", "instant_report"].includes(raw)) return "instant";
+    if (["custom_prebook", "custom", "prebook", "custom_report"].includes(raw)) {
+      return "custom_prebook";
+    }
+    return "";
+  }
+
+  function getLatestLandingChoice(session = {}) {
+    const journey = [...(session?.journey || [])].sort((a, b) =>
+      String(a?.event_ts || "").localeCompare(String(b?.event_ts || ""))
+    );
+
+    let choice = "";
+    journey.forEach((step) => {
+      if (step?.event_name !== "landing_path_selected") return;
+      const nextChoice = getLandingChoiceFromEvent(step);
+      if (nextChoice) choice = nextChoice;
+    });
+    return choice;
+  }
+
   // The new engagement events were introduced after the original funnel went live.
   // A submitted search logically implies the visitor engaged with and started using
   // the search control, so these helpers preserve a monotonic funnel for older rows.
@@ -6681,6 +6714,22 @@ function UserFunnelPanel({
       return Boolean(purchaseEvent && !isTestPaymentEvent(purchaseEvent));
     });
 
+    const googleLandingExisting = googleSessions.filter(
+      (session) => getLatestLandingChoice(session) === "existing_report"
+    );
+    const googleLandingInstant = googleSessions.filter(
+      (session) => getLatestLandingChoice(session) === "instant"
+    );
+    const googleLandingCustom = googleSessions.filter(
+      (session) => getLatestLandingChoice(session) === "custom_prebook"
+    );
+    const googleLandingChoiceRecorded =
+      googleLandingExisting.length + googleLandingInstant.length + googleLandingCustom.length;
+    const googleLandingNoChoice = Math.max(
+      0,
+      googleSessions.length - googleLandingChoiceRecorded
+    );
+
     const landingDenominator = googleLandings.length || googleSessions.length;
 
     return {
@@ -6699,6 +6748,14 @@ function UserFunnelPanel({
       googleExistingPurchases: googleExistingPurchases.length,
       googleOffers: googleOffers.length,
       googlePurchases: googlePurchases.length,
+      googleLandingExisting: googleLandingExisting.length,
+      googleLandingInstant: googleLandingInstant.length,
+      googleLandingCustom: googleLandingCustom.length,
+      googleLandingChoiceRecorded,
+      googleLandingNoChoice,
+      googleLandingChoiceRate: googleSessions.length
+        ? Math.round((googleLandingChoiceRecorded / googleSessions.length) * 100)
+        : 0,
       googleLandingToEngagedRate: landingDenominator
         ? Math.round((googleSearchEngaged.length / landingDenominator) * 100)
         : 0,
@@ -6734,6 +6791,28 @@ function UserFunnelPanel({
         : 0,
     };
   }, [baseSessions]);
+
+  const landingChoiceSummary = useMemo(() => {
+    const result = {
+      sessions: visibleSessions.length,
+      recorded: 0,
+      existing: 0,
+      instant: 0,
+      custom: 0,
+      noRecordedChoice: 0,
+    };
+
+    visibleSessions.forEach((session) => {
+      const choice = getLatestLandingChoice(session);
+      if (choice === "existing_report") result.existing += 1;
+      else if (choice === "instant") result.instant += 1;
+      else if (choice === "custom_prebook") result.custom += 1;
+      else result.noRecordedChoice += 1;
+    });
+
+    result.recorded = result.existing + result.instant + result.custom;
+    return result;
+  }, [visibleSessions]);
 
   const sampleEffectiveness = useMemo(() => {
     const offerSessions = visibleSessions.filter(
@@ -6836,6 +6915,11 @@ function UserFunnelPanel({
       if (choseInstant) return "Instant";
     }
 
+    const landingChoice = getLatestLandingChoice(session);
+    if (landingChoice === "custom_prebook") return "Custom (landing)";
+    if (landingChoice === "instant") return "Instant (landing)";
+    if (landingChoice === "existing_report") return "Existing report (landing)";
+
     return "No choice";
   }
 
@@ -6849,6 +6933,7 @@ function UserFunnelPanel({
   function getOutcome(session = {}) {
     const latestAttempt = getLatestSearchAttempt(session);
     const hasLatest = (eventName) => latestAttempt.some((step) => step?.event_name === eventName);
+    const hasDirect = (eventName) => latestAttempt.length === 0 && hasEvent(session, eventName);
 
     const existingPurchase = getLatestSearchEvent(session, "existing_report_purchase");
     if (existingPurchase) {
@@ -6877,6 +6962,29 @@ function UserFunnelPanel({
     if (hasLatest("prebook_offer_shown")) return "Offer viewed";
     if (hasLatest("search_generic_hint_shown")) return "Generic search guidance";
     if (hasLatest("search_error")) return "Search error";
+
+    // The new landing page can send Instant/Custom buyers directly into the
+    // purchase flow without a report_search event. Read those global events
+    // only when this session has no submitted search, so an older purchase does
+    // not override the outcome of a newer search in the same browser session.
+    if (hasDirect("payment_success")) return "Paid";
+    if (hasDirect("payment_cancelled")) return "Cancelled";
+    if (hasDirect("razorpay_opened")) return "At Razorpay";
+    if (hasDirect("checkout_started")) return "Checkout";
+    if (hasDirect("identity_ready")) return "Identity ready";
+    if (hasDirect("order_details_submitted")) return "Details submitted";
+    if (hasDirect("order_details_started")) return "Details started";
+    if (hasDirect("landing_product_topic_submitted")) return "Topic submitted";
+    if (hasDirect("prebook_order_clicked")) return "Custom clicked";
+    if (hasDirect("instant_order_clicked")) return "Instant clicked";
+
+    if (latestAttempt.length === 0) {
+      const landingChoice = getLatestLandingChoice(session);
+      if (landingChoice === "custom_prebook") return "Custom selected";
+      if (landingChoice === "instant") return "Instant selected";
+      if (landingChoice === "existing_report") return "Existing report selected";
+    }
+
     if (reachedSearchSubmitted(session)) return "Search submitted";
     if (hasEvent(session, "search_started")) return "Search started";
     if (hasEvent(session, "search_box_focused")) return "Search engaged";
@@ -7191,6 +7299,109 @@ function UserFunnelPanel({
             {" • "}
             Google Ads session → purchase: <span className="mono">{trafficSourceSummary.googlePurchaseRate}%</span>
           </div>
+        </div>
+      </section>
+
+      <section
+        className="card glass"
+        style={{
+          border: "1px solid rgba(56,189,248,0.24)",
+          background: "rgba(14,165,233,0.045)",
+        }}
+      >
+        <div className="cardTitleRow" style={{ alignItems: "flex-start", gap: 12 }}>
+          <div>
+            <div className="cardTitle">Landing Page Choice</div>
+            <div className="mutedSmall" style={{ marginTop: 4 }}>
+              Latest recorded selection per session on the new three-option landing page. Counts do not overlap.
+            </div>
+          </div>
+          <div className="mutedSmall" style={{ textAlign: "right" }}>
+            Choice recorded: <span className="mono">{pct(landingChoiceSummary.recorded, landingChoiceSummary.sessions)}</span>
+            <div style={{ marginTop: 3, opacity: 0.72 }}>
+              {trafficSourceFilter === "google"
+                ? "Google Ads only"
+                : trafficSourceFilter === "direct"
+                ? "Direct / unknown only"
+                : "All traffic"}
+            </div>
+          </div>
+        </div>
+
+        <div className="statsGrid" style={{ marginTop: 14 }}>
+          <div className="statCard">
+            <div className="mutedSmall">Choice recorded</div>
+            <div className="statValue">{landingChoiceSummary.recorded}</div>
+          </div>
+          <div className="statCard">
+            <div className="mutedSmall">Existing report</div>
+            <div className="statValue">{landingChoiceSummary.existing}</div>
+          </div>
+          <div className="statCard">
+            <div className="mutedSmall">Instant — ₹199</div>
+            <div className="statValue">{landingChoiceSummary.instant}</div>
+          </div>
+          <div className="statCard">
+            <div className="mutedSmall">Custom — ₹6,499</div>
+            <div className="statValue">{landingChoiceSummary.custom}</div>
+          </div>
+          <div className="statCard">
+            <div className="mutedSmall">No recorded choice</div>
+            <div className="statValue">{landingChoiceSummary.noRecordedChoice}</div>
+          </div>
+        </div>
+
+        <div className="mutedSmall" style={{ marginTop: 10, lineHeight: 1.7 }}>
+          Among recorded choices — Existing: <span className="mono">{pct(landingChoiceSummary.existing, landingChoiceSummary.recorded)}</span>
+          {" • "}
+          Instant: <span className="mono">{pct(landingChoiceSummary.instant, landingChoiceSummary.recorded)}</span>
+          {" • "}
+          Custom: <span className="mono">{pct(landingChoiceSummary.custom, landingChoiceSummary.recorded)}</span>
+        </div>
+
+        <div
+          style={{
+            marginTop: 14,
+            paddingTop: 14,
+            borderTop: "1px solid rgba(255,255,255,0.08)",
+          }}
+        >
+          <div className="cardTitleRow" style={{ marginBottom: 10 }}>
+            <div>
+              <div className="cardTitle" style={{ fontSize: 14 }}>Google Ads Landing Choices</div>
+              <div className="mutedSmall">Paid visitors only, regardless of the traffic-source dropdown above.</div>
+            </div>
+            <div className="mutedSmall">
+              Ads choice rate: <span className="mono">{trafficSourceSummary.googleLandingChoiceRate}%</span>
+            </div>
+          </div>
+
+          <div className="statsGrid">
+            <div className="statCard">
+              <div className="mutedSmall">Google Ads sessions</div>
+              <div className="statValue">{trafficSourceSummary.googleSessions}</div>
+            </div>
+            <div className="statCard">
+              <div className="mutedSmall">Existing report</div>
+              <div className="statValue">{trafficSourceSummary.googleLandingExisting}</div>
+            </div>
+            <div className="statCard">
+              <div className="mutedSmall">Instant — ₹199</div>
+              <div className="statValue">{trafficSourceSummary.googleLandingInstant}</div>
+            </div>
+            <div className="statCard">
+              <div className="mutedSmall">Custom — ₹6,499</div>
+              <div className="statValue">{trafficSourceSummary.googleLandingCustom}</div>
+            </div>
+            <div className="statCard">
+              <div className="mutedSmall">No recorded choice</div>
+              <div className="statValue">{trafficSourceSummary.googleLandingNoChoice}</div>
+            </div>
+          </div>
+        </div>
+
+        <div className="mutedSmall" style={{ marginTop: 10, opacity: 0.72 }}>
+          Tracking starts with the new three-option landing page. Sessions from earlier on the selected date can appear as "No recorded choice".
         </div>
       </section>
 
