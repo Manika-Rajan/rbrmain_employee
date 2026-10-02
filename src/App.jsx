@@ -6492,6 +6492,171 @@ function UserFunnelPanel({
     return "";
   }
 
+
+  function landingChoiceLabel(choice = "") {
+    if (choice === "existing_report") return "Existing report";
+    if (choice === "instant") return "Instant ₹199";
+    if (choice === "custom_prebook") return "Custom ₹6,499";
+    return "Unknown";
+  }
+
+  function getChoiceEventTopic(step = {}) {
+    return String(
+      step?.report_query ||
+        step?.reportQuery ||
+        step?.query ||
+        step?.search_query ||
+        ""
+    ).trim();
+  }
+
+  // Preserve every meaningful product decision inside one browser session.
+  // The website emits both a generic landing_path_selected event and a
+  // product-specific event for reliability, so same-choice events fired within
+  // a few seconds are collapsed into one human decision.
+  function getChoiceHistory(session = {}) {
+    const journey = [...(session?.journey || [])].sort((a, b) =>
+      String(a?.event_ts || "").localeCompare(String(b?.event_ts || ""))
+    );
+
+    const history = [];
+    let fallbackOfferActive = false;
+
+    const pushChoice = (choice, step = {}, source = "landing") => {
+      if (!choice) return;
+
+      const eventTs = String(step?.event_ts || "");
+      const topic = getChoiceEventTopic(step);
+      const last = history[history.length - 1];
+      const currentMs = eventTs ? new Date(eventTs).getTime() : NaN;
+      const lastMs = last?.event_ts ? new Date(last.event_ts).getTime() : NaN;
+      const nearDuplicate =
+        last &&
+        last.choice === choice &&
+        last.source === source &&
+        Number.isFinite(currentMs) &&
+        Number.isFinite(lastMs) &&
+        Math.abs(currentMs - lastMs) <= 3000;
+
+      if (nearDuplicate) {
+        if (!last.topic && topic) last.topic = topic;
+        if (!last.event_ts && eventTs) last.event_ts = eventTs;
+        return;
+      }
+
+      history.push({
+        choice,
+        label: landingChoiceLabel(choice),
+        source,
+        event_ts: eventTs,
+        topic,
+      });
+    };
+
+    const attachTopicToLatestChoice = (choice, step = {}) => {
+      const topic = getChoiceEventTopic(step);
+      if (!topic || !history.length) return;
+
+      let targetIndex = -1;
+      for (let i = history.length - 1; i >= 0; i -= 1) {
+        if (!choice || history[i].choice === choice) {
+          targetIndex = i;
+          break;
+        }
+      }
+
+      if (targetIndex >= 0) history[targetIndex].topic = topic;
+    };
+
+    journey.forEach((step) => {
+      const eventName = String(step?.event_name || "");
+
+      if (eventName === "report_search") {
+        fallbackOfferActive = false;
+        const last = history[history.length - 1];
+        if (last?.choice === "existing_report") attachTopicToLatestChoice("existing_report", step);
+        return;
+      }
+
+      if (eventName === "prebook_offer_shown") {
+        fallbackOfferActive = true;
+        return;
+      }
+
+      if (eventName === "landing_existing_report_selected") {
+        fallbackOfferActive = false;
+        pushChoice("existing_report", step, "landing");
+        return;
+      }
+      if (eventName === "landing_instant_selected") {
+        fallbackOfferActive = false;
+        pushChoice("instant", step, "landing");
+        return;
+      }
+      if (eventName === "landing_custom_selected") {
+        fallbackOfferActive = false;
+        pushChoice("custom_prebook", step, "landing");
+        return;
+      }
+
+      if (eventName === "landing_path_selected") {
+        fallbackOfferActive = false;
+        pushChoice(getLandingChoiceFromEvent(step), step, "landing");
+        return;
+      }
+
+      if (eventName === "landing_product_topic_submitted") {
+        fallbackOfferActive = false;
+        const explicitChoice = getLandingChoiceFromEvent(step);
+        const lastChoice = history[history.length - 1]?.choice || "";
+        attachTopicToLatestChoice(explicitChoice || lastChoice, step);
+        return;
+      }
+
+      // Product clicks on the no-match offer are also real product decisions.
+      // Direct landing-page Instant/Custom flows do not set fallbackOfferActive,
+      // so their later order-click events are not double-counted here.
+      if (fallbackOfferActive && eventName === "instant_order_clicked") {
+        pushChoice("instant", step, "fallback");
+        return;
+      }
+      if (fallbackOfferActive && eventName === "prebook_order_clicked") {
+        pushChoice("custom_prebook", step, "fallback");
+      }
+    });
+
+    // Older sessions can contain the generic click without selected_product.
+    // Preserve at least the inferred latest choice for those sessions.
+    if (!history.length) {
+      const inferred = getLatestLandingChoice(session);
+      if (inferred) {
+        history.push({
+          choice: inferred,
+          label: landingChoiceLabel(inferred),
+          source: "inferred",
+          event_ts: "",
+          topic: String(session?.search_query || "").trim(),
+        });
+      }
+    }
+
+    return history;
+  }
+
+  function getChoiceHistoryText(session = {}) {
+    const history = getChoiceHistory(session);
+    if (!history.length) return "No recorded choice";
+    return history
+      .map((item) => (item.topic ? `${item.label} — ${item.topic}` : item.label))
+      .join(" → ");
+  }
+
+  function getLatestChoiceDisplay(session = {}) {
+    const history = getChoiceHistory(session);
+    if (history.length) return history[history.length - 1].label;
+    return getChoice(session);
+  }
+
   // The new engagement events were introduced after the original funnel went live.
   // A submitted search logically implies the visitor engaged with and started using
   // the search control, so these helpers preserve a monotonic funnel for older rows.
@@ -6866,6 +7031,75 @@ function UserFunnelPanel({
 
     result.recorded = result.existing + result.instant + result.custom;
     return result;
+  }, [visibleSessions]);
+
+
+  const choiceHistorySummary = useMemo(() => {
+    const patternMap = new Map();
+    let sessionsWithHistory = 0;
+    let singleChoice = 0;
+    let switchedProducts = 0;
+    let instantToCustom = 0;
+    let customToInstant = 0;
+    let sameTopicSwitch = 0;
+
+    visibleSessions.forEach((session) => {
+      const history = getChoiceHistory(session);
+      if (!history.length) return;
+
+      sessionsWithHistory += 1;
+      if (history.length === 1) singleChoice += 1;
+
+      const hasSwitch = history.some(
+        (item, index) => index > 0 && item.choice !== history[index - 1].choice
+      );
+      if (hasSwitch) switchedProducts += 1;
+
+      let sawInstantBeforeCustom = false;
+      let sawCustomBeforeInstant = false;
+      let sameTopic = false;
+
+      history.forEach((item, index) => {
+        const prior = history.slice(0, index);
+        if (item.choice === "custom_prebook" && prior.some((x) => x.choice === "instant")) {
+          sawInstantBeforeCustom = true;
+        }
+        if (item.choice === "instant" && prior.some((x) => x.choice === "custom_prebook")) {
+          sawCustomBeforeInstant = true;
+        }
+
+        const topic = normalize(item.topic);
+        if (topic) {
+          sameTopic =
+            sameTopic ||
+            prior.some(
+              (x) => x.choice !== item.choice && normalize(x.topic) && normalize(x.topic) === topic
+            );
+        }
+      });
+
+      if (sawInstantBeforeCustom) instantToCustom += 1;
+      if (sawCustomBeforeInstant) customToInstant += 1;
+      if (sameTopic) sameTopicSwitch += 1;
+
+      const pattern = history.map((item) => item.label).join(" → ");
+      patternMap.set(pattern, (patternMap.get(pattern) || 0) + 1);
+    });
+
+    const topPatterns = Array.from(patternMap.entries())
+      .map(([pattern, count]) => ({ pattern, count }))
+      .sort((a, b) => b.count - a.count || a.pattern.localeCompare(b.pattern))
+      .slice(0, 6);
+
+    return {
+      sessionsWithHistory,
+      singleChoice,
+      switchedProducts,
+      instantToCustom,
+      customToInstant,
+      sameTopicSwitch,
+      topPatterns,
+    };
   }, [visibleSessions]);
 
   const sampleEffectiveness = useMemo(() => {
@@ -7365,9 +7599,9 @@ function UserFunnelPanel({
       >
         <div className="cardTitleRow" style={{ alignItems: "flex-start", gap: 12 }}>
           <div>
-            <div className="cardTitle">Landing Page Choice</div>
+            <div className="cardTitle">Landing Page Latest Choice</div>
             <div className="mutedSmall" style={{ marginTop: 4 }}>
-              Latest recorded selection per session on the new three-option landing page. Counts do not overlap.
+              Where each session ended among the three landing-page products. Counts do not overlap.
             </div>
           </div>
           <div className="mutedSmall" style={{ textAlign: "right" }}>
@@ -7452,6 +7686,79 @@ function UserFunnelPanel({
               <div className="statValue">{trafficSourceSummary.googleLandingNoChoice}</div>
             </div>
           </div>
+        </div>
+
+        <div
+          style={{
+            marginTop: 16,
+            paddingTop: 14,
+            borderTop: "1px solid rgba(255,255,255,0.08)",
+          }}
+        >
+          <div className="cardTitleRow" style={{ alignItems: "flex-start", gap: 12 }}>
+            <div>
+              <div className="cardTitle" style={{ fontSize: 14 }}>Choice History</div>
+              <div className="mutedSmall" style={{ marginTop: 4 }}>
+                Every recorded product decision in chronological order. This preserves switches such as Instant → Custom instead of keeping only the final choice.
+              </div>
+            </div>
+            <div className="mutedSmall" style={{ textAlign: "right" }}>
+              History available: <span className="mono">{choiceHistorySummary.sessionsWithHistory}</span>
+            </div>
+          </div>
+
+          <div className="statsGrid" style={{ marginTop: 12 }}>
+            <div className="statCard">
+              <div className="mutedSmall">Sessions with history</div>
+              <div className="statValue">{choiceHistorySummary.sessionsWithHistory}</div>
+            </div>
+            <div className="statCard">
+              <div className="mutedSmall">One product only</div>
+              <div className="statValue">{choiceHistorySummary.singleChoice}</div>
+            </div>
+            <div className="statCard">
+              <div className="mutedSmall">Switched products</div>
+              <div className="statValue">{choiceHistorySummary.switchedProducts}</div>
+            </div>
+            <div className="statCard">
+              <div className="mutedSmall">Instant → Custom</div>
+              <div className="statValue">{choiceHistorySummary.instantToCustom}</div>
+            </div>
+            <div className="statCard">
+              <div className="mutedSmall">Custom → Instant</div>
+              <div className="statValue">{choiceHistorySummary.customToInstant}</div>
+            </div>
+            <div className="statCard">
+              <div className="mutedSmall">Same-topic switch</div>
+              <div className="statValue">{choiceHistorySummary.sameTopicSwitch}</div>
+            </div>
+          </div>
+
+          {choiceHistorySummary.topPatterns.length ? (
+            <div style={{ marginTop: 12 }}>
+              <div className="mutedSmall" style={{ marginBottom: 7 }}>Most common decision paths</div>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 7 }}>
+                {choiceHistorySummary.topPatterns.map((item) => (
+                  <span
+                    key={item.pattern}
+                    style={{
+                      display: "inline-flex",
+                      alignItems: "center",
+                      gap: 7,
+                      borderRadius: 999,
+                      padding: "6px 9px",
+                      background: "rgba(56,189,248,0.08)",
+                      border: "1px solid rgba(56,189,248,0.18)",
+                      fontSize: 11,
+                    }}
+                  >
+                    <span>{item.pattern}</span>
+                    <strong className="mono">{item.count}</strong>
+                  </span>
+                ))}
+              </div>
+            </div>
+          ) : null}
         </div>
 
         <div className="mutedSmall" style={{ marginTop: 10, opacity: 0.72 }}>
@@ -7775,7 +8082,7 @@ function UserFunnelPanel({
           <div>
             <div className="cardTitle">Session Journeys</div>
             <div className="mutedSmall" style={{ marginTop: 4 }}>
-              Search engagement, submitted query, Google Ads attribution, search-result path, product choice, and the deepest stage reached.
+              Search engagement, submitted query, Google Ads attribution, latest product choice, full choice history, and the deepest stage reached.
             </div>
           </div>
           <div className="mutedSmall" style={{ textAlign: "right" }}>
@@ -7808,7 +8115,8 @@ function UserFunnelPanel({
                   <th style={{ width: 128 }}>Search stage</th>
                   <th>Source / campaign</th>
                   <th style={{ width: 92 }}>Sample</th>
-                  <th style={{ width: 140 }}>Path / choice</th>
+                  <th style={{ width: 135 }}>Latest choice</th>
+                  <th style={{ minWidth: 220 }}>Choice history</th>
                   <th style={{ width: 100 }}>OTP</th>
                   <th style={{ width: 110 }}>Razorpay</th>
                   <th style={{ width: 132 }}>Outcome</th>
@@ -7831,6 +8139,9 @@ function UserFunnelPanel({
                     latestSearchHasEvent(session, "existing_report_razorpay_opened");
                   const sample = session.sample_viewed || hasEvent(session, "custom_sample_viewed");
                   const searchStage = getSearchStage(session);
+                  const choiceHistory = getChoiceHistory(session);
+                  const choiceHistoryText = getChoiceHistoryText(session);
+                  const latestChoiceDisplay = getLatestChoiceDisplay(session);
 
                   return (
                     <React.Fragment key={sid}>
@@ -7882,7 +8193,12 @@ function UserFunnelPanel({
                           ) : null}
                         </td>
                         <td>{sample ? "Yes" : "No"}</td>
-                        <td>{getChoice(session)}</td>
+                        <td>{latestChoiceDisplay}</td>
+                        <td>
+                          <div style={{ fontSize: 11, lineHeight: 1.45, maxWidth: 320 }} title={choiceHistoryText}>
+                            {choiceHistoryText}
+                          </div>
+                        </td>
                         <td>{hasOtp ? "Verified" : hasIdentity ? "Skipped / known" : "-"}</td>
                         <td>{hasRazorpay ? "Opened" : "-"}</td>
                         <td>
@@ -7910,7 +8226,7 @@ function UserFunnelPanel({
 
                       {expanded ? (
                         <tr>
-                          <td colSpan={10} style={{ padding: 0 }}>
+                          <td colSpan={11} style={{ padding: 0 }}>
                             <div
                               style={{
                                 padding: 14,
@@ -7949,6 +8265,40 @@ function UserFunnelPanel({
                                     )}
                                   </div>
                                 </div>
+                              </div>
+
+                              <div>
+                                <div className="mutedSmall" style={{ marginBottom: 7 }}>Choice history</div>
+                                {choiceHistory.length ? (
+                                  <div style={{ display: "flex", gap: 7, flexWrap: "wrap" }}>
+                                    {choiceHistory.map((item, index) => (
+                                      <span
+                                        key={`${item.choice}-${item.event_ts}-${index}`}
+                                        style={{
+                                          display: "inline-flex",
+                                          flexDirection: "column",
+                                          gap: 2,
+                                          padding: "7px 10px",
+                                          borderRadius: 12,
+                                          background: "rgba(56,189,248,0.08)",
+                                          border: "1px solid rgba(56,189,248,0.18)",
+                                          color: "rgba(224,242,254,0.96)",
+                                          fontSize: 11,
+                                          maxWidth: 320,
+                                        }}
+                                      >
+                                        <span>
+                                          <strong>{index + 1}. {item.label}</strong>
+                                          {item.source === "fallback" ? " • fallback" : item.source === "landing" ? " • landing" : ""}
+                                        </span>
+                                        {item.topic ? <span style={{ opacity: 0.82 }}>Topic: {item.topic}</span> : null}
+                                        {item.event_ts ? <span style={{ opacity: 0.58 }}>{fmtTime(item.event_ts)}</span> : null}
+                                      </span>
+                                    ))}
+                                  </div>
+                                ) : (
+                                  <div className="mutedSmall">No product choice was recorded in this session.</div>
+                                )}
                               </div>
 
                               <div>
