@@ -6430,12 +6430,66 @@ function UserFunnelPanel({
     );
 
     let choice = "";
-    journey.forEach((step) => {
-      if (step?.event_name !== "landing_path_selected") return;
-      const nextChoice = getLandingChoiceFromEvent(step);
-      if (nextChoice) choice = nextChoice;
+    let sawGenericLandingChoice = false;
+    let lastGenericLandingIndex = -1;
+
+    journey.forEach((step, index) => {
+      const eventName = String(step?.event_name || "");
+
+      // Preferred path: product-specific event names emitted by the landing page.
+      if (eventName === "landing_existing_report_selected") {
+        choice = "existing_report";
+        return;
+      }
+      if (eventName === "landing_instant_selected") {
+        choice = "instant";
+        return;
+      }
+      if (eventName === "landing_custom_selected") {
+        choice = "custom_prebook";
+        return;
+      }
+
+      // Backward-compatible generic event.
+      if (eventName === "landing_path_selected") {
+        sawGenericLandingChoice = true;
+        lastGenericLandingIndex = index;
+        const nextChoice = getLandingChoiceFromEvent(step);
+        if (nextChoice) choice = nextChoice;
+        return;
+      }
+
+      // The topic-submit event is unique to direct landing-page Instant/Custom.
+      if (eventName === "landing_product_topic_submitted") {
+        const nextChoice = getLandingChoiceFromEvent(step);
+        if (nextChoice) choice = nextChoice;
+      }
     });
-    return choice;
+
+    if (choice) return choice;
+
+    // Compatibility inference for sessions collected before the product-specific
+    // event-name fix. The generic click may be present while selected_product
+    // was stripped by the ingest/read layer.
+    if (sawGenericLandingChoice) {
+      const afterLanding = journey.slice(Math.max(0, lastGenericLandingIndex + 1));
+
+      let inferred = "";
+      afterLanding.forEach((step) => {
+        const eventName = String(step?.event_name || "");
+        if (eventName === "prebook_order_clicked") inferred = "custom_prebook";
+        else if (eventName === "instant_order_clicked") inferred = "instant";
+      });
+
+      if (inferred) return inferred;
+
+      // Existing-report landing choice goes into the normal catalogue search path.
+      if (afterLanding.some((step) => step?.event_name === "report_search")) {
+        return "existing_report";
+      }
+    }
+
+    return "";
   }
 
   // The new engagement events were introduced after the original funnel went live.
@@ -7401,7 +7455,7 @@ function UserFunnelPanel({
         </div>
 
         <div className="mutedSmall" style={{ marginTop: 10, opacity: 0.72 }}>
-          Tracking starts with the new three-option landing page. Sessions from earlier on the selected date can appear as "No recorded choice".
+          Tracking starts with the new three-option landing page. Product-specific choice events are now used so Existing, Instant and Custom remain distinguishable even if event metadata is stripped by the backend. Earlier pre-feature sessions can still appear as "No recorded choice".
         </div>
       </section>
 
