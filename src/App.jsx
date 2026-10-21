@@ -1684,6 +1684,19 @@ function loadWebsiteSearchExclusionsCloudKey() {
   catch { return ""; }
 }
 
+// Safe diagnostic identifier: only the first 12 hex characters of the SHA-256
+// digest of the high-entropy access key. Never display or log the actual key.
+async function websiteExclusionsKeyFingerprint(secret) {
+  try {
+    const encoded = new TextEncoder().encode(secret);
+    const digest = await window.crypto.subtle.digest("SHA-256", encoded);
+    return Array.from(new Uint8Array(digest)).slice(0, 6)
+      .map((byte) => byte.toString(16).padStart(2, "0")).join("");
+  } catch {
+    return "not available";
+  }
+}
+
 function persistWebsiteSearchExclusionsLocally(settings) {
   try {
     localStorage.setItem(WEBSITE_SEARCH_EXCLUSIONS_STORAGE_KEY, JSON.stringify(settings));
@@ -4105,21 +4118,51 @@ export default function App() {
     }));
   }
 
-  function connectWebsiteExclusionsSync(key) {
+  async function connectWebsiteExclusionsSync(key) {
     const secret = String(key || "").trim();
     if (secret.length < 20) {
       setExclusionSyncStatus({ state: "error", message: "Enter the 20+ character access key created when you deployed the settings API.", updatedAt: "" });
       return false;
     }
-    try { localStorage.setItem(WEBSITE_SEARCH_EXCLUSIONS_CLOUD_KEY_STORAGE_KEY, secret); }
-    catch {
-      setExclusionSyncStatus({ state: "error", message: "Browser could not remember the access key.", updatedAt: "" });
+    if (!WEBSITE_EXCLUSIONS_SYNC_API) {
+      setExclusionSyncStatus({ state: "error", message: "Cloud sync API URL is not configured in Amplify.", updatedAt: "" });
       return false;
     }
-    exclusionCloudVersionRef.current = 0;
-    setExclusionSyncKey(secret);
-    setExclusionSyncStatus({ state: "connecting", message: "Connecting to saved cloud rules…", updatedAt: "" });
-    return true;
+    // Validate the exact key against the live cloud API BEFORE saving it to
+    // this browser. Never display, persist to logs, or send the key to another host.
+    setExclusionSyncStatus({ state: "connecting", message: "Testing the cloud access key…", updatedAt: "" });
+    const fingerprint = await websiteExclusionsKeyFingerprint(secret);
+    try {
+      const { res, data } = await fetchJson(WEBSITE_EXCLUSIONS_SYNC_API, {
+        method: "GET",
+        headers: { "Accept": "application/json", "x-rbr-settings-key": secret },
+        cache: "no-store",
+      });
+      if (!res.ok || data?.ok === false) {
+        setExclusionSyncStatus({
+          state: "error",
+          message: `Connection test: HTTP ${res.status}. Entered key has ${secret.length} characters; fingerprint ${fingerprint}. Compare these with the CloudShell diagnostic below. ${data?.error || ""}`,
+          updatedAt: "",
+        });
+        return false;
+      }
+      try { localStorage.setItem(WEBSITE_SEARCH_EXCLUSIONS_CLOUD_KEY_STORAGE_KEY, secret); }
+      catch {
+        setExclusionSyncStatus({ state: "error", message: "Browser could not remember the access key.", updatedAt: "" });
+        return false;
+      }
+      exclusionCloudVersionRef.current = Number(data.version || 0);
+      setExclusionSyncKey(secret);
+      setExclusionSyncStatus({ state: "connecting", message: "Access key verified (HTTP 200). Loading/saving cloud rules…", updatedAt: "" });
+      return true;
+    } catch (err) {
+      setExclusionSyncStatus({
+        state: "error",
+        message: `Connection test could not reach the cloud API: ${err?.message || "network or CORS error"}. Key length ${secret.length}, fingerprint ${fingerprint}.`,
+        updatedAt: "",
+      });
+      return false;
+    }
   }
 
   function disconnectWebsiteExclusionsSync() {
@@ -4179,8 +4222,10 @@ export default function App() {
         headers: { "Accept": "application/json", "x-rbr-settings-key": exclusionSyncKey },
       });
       if (!res.ok || data?.ok === false) {
+        const fingerprint = res.status === 401
+          ? await websiteExclusionsKeyFingerprint(exclusionSyncKey) : "";
         throw new Error(res.status === 401
-          ? "Cloud access key was rejected. Check the key in AWS CloudShell and reconnect."
+          ? `Cloud access key was rejected (HTTP 401). Saved key: ${exclusionSyncKey.length} characters, fingerprint ${fingerprint}. Compare with CloudShell, then disconnect and reconnect.`
           : buildErrorMessage(res, data, `Could not load cloud rules (HTTP ${res.status})`));
       }
       const version = Number(data.version || 0);
@@ -6374,6 +6419,7 @@ export default function App() {
                 savedExclusions={savedWebsiteSearchExclusions}
                 updateSavedExclusions={updateSavedWebsiteSearchExclusions}
                 cloudSyncConfigured={Boolean(WEBSITE_EXCLUSIONS_SYNC_API)}
+                cloudSyncApiUrl={WEBSITE_EXCLUSIONS_SYNC_API}
                 cloudSyncKeyPresent={Boolean(exclusionSyncKey)}
                 cloudSyncStatus={exclusionSyncStatus}
                 connectCloudSync={connectWebsiteExclusionsSync}
@@ -10885,6 +10931,7 @@ function WebsiteSearchesPanel({
   savedExclusions,
   updateSavedExclusions,
   cloudSyncConfigured,
+  cloudSyncApiUrl,
   cloudSyncKeyPresent,
   cloudSyncStatus,
   connectCloudSync,
@@ -11174,7 +11221,7 @@ function WebsiteSearchesPanel({
               {savedConditionCount
                 ? `${savedExclusions.enabled ? "Active" : "Paused"} • ${savedExclusions.mode === "all" ? "AND" : "OR"} conditions • ${formatNumberCompact(exclusionCount)} rows excluded`
                 : "No conditions saved. All loaded searches are visible."}
-              {cloudSyncConfigured ? " • Shared cloud settings" : " • Saved in this browser"}
+              {cloudSyncStatus.state === "synced" ? " • Cloud synchronized" : cloudSyncConfigured ? " • Cloud sync available" : " • Saved in this browser"}
             </div>
           </div>
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
@@ -11206,6 +11253,7 @@ function WebsiteSearchesPanel({
                   {cloudSyncStatus.state === "synced" ? "✓ " : ""}
                   {cloudSyncStatus.message || "Connected. This browser loads the shared rules whenever you open the page."}
                 </div>
+                {cloudSyncStatus.state === "error" ? <div className="mutedSmall" style={{ marginTop: 6, overflowWrap: "anywhere" }}>Configured cloud API: {cloudSyncApiUrl}</div> : null}
                 <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 9 }}>
                   <button className="btnSecondary" type="button" onClick={syncCloudNow}>Sync now</button>
                   <button className="btnSecondary" type="button" onClick={disconnectCloudSync}>Disconnect this browser</button>
@@ -11219,10 +11267,13 @@ function WebsiteSearchesPanel({
                     value={cloudKeyDraft} placeholder="Private settings sync access key"
                     onChange={(e) => setCloudKeyDraft(e.target.value)} />
                   <button className="btnPrimary" type="button" onClick={() => {
-                    if (connectCloudSync(cloudKeyDraft)) setCloudKeyDraft("");
+                    Promise.resolve(connectCloudSync(cloudKeyDraft)).then((success) => {
+                      if (success) setCloudKeyDraft("");
+                    });
                   }}>Connect cloud sync</button>
                 </div>
                 {cloudSyncStatus.message ? <div className="mutedSmall" style={{ marginTop: 6 }}>{cloudSyncStatus.message}</div> : null}
+                {cloudSyncStatus.state === "error" ? <div className="mutedSmall" style={{ marginTop: 6, overflowWrap: "anywhere" }}>Configured cloud API: {cloudSyncApiUrl}</div> : null}
               </div>
             )}
           </div>
