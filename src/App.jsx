@@ -1676,6 +1676,20 @@ function getRawColumnValue(raw = {}, columnName = "") {
 // Saved, client-side exclusion rules for the dedicated Website Searches tab.
 // These never change the S3 log or the API response: only the visible rows.
 const WEBSITE_SEARCH_EXCLUSIONS_STORAGE_KEY = "rbr_website_search_exclusions_v1";
+const WEBSITE_SEARCH_EXCLUSIONS_PANEL_STORAGE_KEY = "rbr_website_search_exclusions_panel_open_v1";
+const WEBSITE_SEARCH_EXCLUSIONS_CLOUD_KEY_STORAGE_KEY = "rbr_website_search_exclusions_sync_key_v1";
+
+function loadWebsiteSearchExclusionsCloudKey() {
+  try { return localStorage.getItem(WEBSITE_SEARCH_EXCLUSIONS_CLOUD_KEY_STORAGE_KEY) || ""; }
+  catch { return ""; }
+}
+
+function persistWebsiteSearchExclusionsLocally(settings) {
+  try {
+    localStorage.setItem(WEBSITE_SEARCH_EXCLUSIONS_STORAGE_KEY, JSON.stringify(settings));
+    return true;
+  } catch { return false; }
+}
 const WEBSITE_SEARCH_EXCLUSION_FIELDS = [
   { value: "email", label: "Email" },
   { value: "phone", label: "Phone" },
@@ -2110,6 +2124,8 @@ export default function App() {
   // Always use the original, dedicated Website Searches API (not Traffic Intelligence).
   const WEBSITE_SEARCHES_API = import.meta.env.VITE_WEBSITE_SEARCHES_API ||
     "https://jp1bupouyl.execute-api.ap-south-1.amazonaws.com/prod/website-searches/list";
+  // Separate protected settings API. The search logs continue using their dedicated endpoint.
+  const WEBSITE_EXCLUSIONS_SYNC_API = import.meta.env.VITE_WEBSITE_EXCLUSIONS_SYNC_API || "";
   const BULK_REPORTS_API = import.meta.env.VITE_BULK_REPORTS_API || "";
   const USER_FUNNEL_API =
     import.meta.env.VITE_USER_FUNNEL_API ||
@@ -2280,6 +2296,15 @@ export default function App() {
   const [searchExplorerFetchProgress, setSearchExplorerFetchProgress] = useState(null);
   const [searchExplorerSearch, setSearchExplorerSearch] = useState("");
   const [savedWebsiteSearchExclusions, setSavedWebsiteSearchExclusions] = useState(loadWebsiteSearchExclusions);
+  const [exclusionSyncKey, setExclusionSyncKey] = useState(loadWebsiteSearchExclusionsCloudKey);
+  const [exclusionSyncStatus, setExclusionSyncStatus] = useState({
+    state: "idle", message: "", updatedAt: "",
+  });
+  const exclusionCloudVersionRef = useRef(0);
+  const exclusionCloudBusyRef = useRef(false);
+  const exclusionCloudSavingRef = useRef(false);
+  const savedExclusionsRef = useRef(savedWebsiteSearchExclusions);
+  savedExclusionsRef.current = savedWebsiteSearchExclusions;
   const [searchExplorerGroupBy, setSearchExplorerGroupBy] = useState("ip");
   const [expandedSearchExplorerGroups, setExpandedSearchExplorerGroups] = useState({});
   const [expandedSearchExplorerRows, setExpandedSearchExplorerRows] = useState({});
@@ -4080,16 +4105,119 @@ export default function App() {
     }));
   }
 
-  function updateSavedWebsiteSearchExclusions(nextSettings) {
-    const normalized = normalizeWebsiteSearchExclusionSettings(nextSettings);
-    try {
-      localStorage.setItem(WEBSITE_SEARCH_EXCLUSIONS_STORAGE_KEY, JSON.stringify(normalized));
-      setSavedWebsiteSearchExclusions(normalized);
-      return true;
-    } catch {
+  function connectWebsiteExclusionsSync(key) {
+    const secret = String(key || "").trim();
+    if (secret.length < 20) {
+      setExclusionSyncStatus({ state: "error", message: "Enter the 20+ character access key created when you deployed the settings API.", updatedAt: "" });
       return false;
     }
+    try { localStorage.setItem(WEBSITE_SEARCH_EXCLUSIONS_CLOUD_KEY_STORAGE_KEY, secret); }
+    catch {
+      setExclusionSyncStatus({ state: "error", message: "Browser could not remember the access key.", updatedAt: "" });
+      return false;
+    }
+    exclusionCloudVersionRef.current = 0;
+    setExclusionSyncKey(secret);
+    setExclusionSyncStatus({ state: "connecting", message: "Connecting to saved cloud rules…", updatedAt: "" });
+    return true;
   }
+
+  function disconnectWebsiteExclusionsSync() {
+    try { localStorage.removeItem(WEBSITE_SEARCH_EXCLUSIONS_CLOUD_KEY_STORAGE_KEY); } catch {}
+    setExclusionSyncKey("");
+    exclusionCloudVersionRef.current = 0;
+    setExclusionSyncStatus({ state: "idle", message: "This browser is disconnected. Existing local rules are preserved.", updatedAt: "" });
+  }
+
+  async function updateSavedWebsiteSearchExclusions(nextSettings) {
+    const normalized = normalizeWebsiteSearchExclusionSettings(nextSettings);
+    if (!WEBSITE_EXCLUSIONS_SYNC_API) {
+      if (!persistWebsiteSearchExclusionsLocally(normalized)) return false;
+      savedExclusionsRef.current = normalized;
+      setSavedWebsiteSearchExclusions(normalized);
+      return true;
+    }
+    if (!exclusionSyncKey) {
+      setExclusionSyncStatus({ state: "error", message: "Connect the secure cloud sync key before saving. Your draft is unchanged.", updatedAt: "" });
+      return false;
+    }
+    if (exclusionCloudSavingRef.current) return false;
+    exclusionCloudSavingRef.current = true;
+    setExclusionSyncStatus({ state: "saving", message: "Saving rules to AWS…", updatedAt: "" });
+    try {
+      const { res, data } = await fetchJson(WEBSITE_EXCLUSIONS_SYNC_API, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json", "x-rbr-settings-key": exclusionSyncKey },
+        body: JSON.stringify({ settings: normalized, expectedVersion: exclusionCloudVersionRef.current }),
+      });
+      if (!res.ok || data?.ok === false) {
+        if (res.status === 409) {
+          throw new Error("Another computer saved newer rules. Click Sync now to reload them; your unsaved editor changes remain available.");
+        }
+        throw new Error(buildErrorMessage(res, data, `AWS settings save failed (HTTP ${res.status})`));
+      }
+      exclusionCloudVersionRef.current = Number(data.version ?? exclusionCloudVersionRef.current + 1);
+      persistWebsiteSearchExclusionsLocally(normalized);
+      savedExclusionsRef.current = normalized;
+      setSavedWebsiteSearchExclusions(normalized);
+      setExclusionSyncStatus({ state: "synced", message: "Saved and synchronized across connected browsers.", updatedAt: data.updatedAt || new Date().toISOString() });
+      return true;
+    } catch (err) {
+      setExclusionSyncStatus({ state: "error", message: err?.message || "Could not save cloud rules. Check the API connection.", updatedAt: "" });
+      return false;
+    } finally {
+      exclusionCloudSavingRef.current = false;
+    }
+  }
+
+  async function fetchWebsiteExclusionsFromCloud() {
+    if (!WEBSITE_EXCLUSIONS_SYNC_API || !exclusionSyncKey || exclusionCloudBusyRef.current || exclusionCloudSavingRef.current) return;
+    exclusionCloudBusyRef.current = true;
+    try {
+      const { res, data } = await fetchJson(WEBSITE_EXCLUSIONS_SYNC_API, {
+        method: "GET",
+        headers: { "Accept": "application/json", "x-rbr-settings-key": exclusionSyncKey },
+      });
+      if (!res.ok || data?.ok === false) {
+        throw new Error(res.status === 401
+          ? "Cloud access key was rejected. Check the key in AWS CloudShell and reconnect."
+          : buildErrorMessage(res, data, `Could not load cloud rules (HTTP ${res.status})`));
+      }
+      const version = Number(data.version || 0);
+      exclusionCloudVersionRef.current = version;
+      if (data.exists === false) {
+        // First-ever setup: safely migrate rules from this browser to the empty cloud record.
+        const local = savedExclusionsRef.current;
+        if (local.rules.length) {
+          exclusionCloudBusyRef.current = false;
+          await updateSavedWebsiteSearchExclusions(local);
+          return;
+        }
+      }
+      const remote = normalizeWebsiteSearchExclusionSettings(data.settings);
+      persistWebsiteSearchExclusionsLocally(remote);
+      savedExclusionsRef.current = remote;
+      setSavedWebsiteSearchExclusions(remote);
+      setExclusionSyncStatus({ state: "synced", message: "Cloud rules are up to date.", updatedAt: data.updatedAt || "" });
+    } catch (err) {
+      setExclusionSyncStatus({ state: "error", message: err?.message || "Unable to fetch cloud rules.", updatedAt: "" });
+    } finally {
+      exclusionCloudBusyRef.current = false;
+    }
+  }
+
+  useEffect(() => {
+    if (!isWebsiteSearches || !WEBSITE_EXCLUSIONS_SYNC_API || !exclusionSyncKey) return;
+    fetchWebsiteExclusionsFromCloud();
+    const onFocus = () => fetchWebsiteExclusionsFromCloud();
+    window.addEventListener("focus", onFocus);
+    const timer = window.setInterval(fetchWebsiteExclusionsFromCloud, 60000);
+    return () => {
+      window.removeEventListener("focus", onFocus);
+      window.clearInterval(timer);
+    };
+    // Refresh on tab entry, window focus and every 60 seconds while the tab is active.
+  }, [isWebsiteSearches, exclusionSyncKey, WEBSITE_EXCLUSIONS_SYNC_API]);
 
   async function loadWebsiteSearches(requestedRange = null) {
     const chosen = requestedRange || searchExplorerAppliedRange || {
@@ -6245,6 +6373,12 @@ export default function App() {
                 exclusionCount={searchExplorerExcludedCount}
                 savedExclusions={savedWebsiteSearchExclusions}
                 updateSavedExclusions={updateSavedWebsiteSearchExclusions}
+                cloudSyncConfigured={Boolean(WEBSITE_EXCLUSIONS_SYNC_API)}
+                cloudSyncKeyPresent={Boolean(exclusionSyncKey)}
+                cloudSyncStatus={exclusionSyncStatus}
+                connectCloudSync={connectWebsiteExclusionsSync}
+                disconnectCloudSync={disconnectWebsiteExclusionsSync}
+                syncCloudNow={fetchWebsiteExclusionsFromCloud}
                 loading={searchExplorerLoading}
                 error={searchExplorerError}
                 dateFrom={searchExplorerFromDate}
@@ -10750,6 +10884,12 @@ function WebsiteSearchesPanel({
   exclusionCount,
   savedExclusions,
   updateSavedExclusions,
+  cloudSyncConfigured,
+  cloudSyncKeyPresent,
+  cloudSyncStatus,
+  connectCloudSync,
+  disconnectCloudSync,
+  syncCloudNow,
   loading,
   error,
   dateFrom,
@@ -10777,13 +10917,44 @@ function WebsiteSearchesPanel({
 }) {
   const [visibleRawColumns, setVisibleRawColumns] = useState([]);
   // Draft rules can be edited without altering what's currently on screen.
-  // Only Save applies them and writes them to this browser's localStorage.
+  // Only Save applies them. Cloud-configured sites persist changes in AWS first.
   const [exclusionDraft, setExclusionDraft] = useState(() => ({
     mode: savedExclusions.mode,
     rules: savedExclusions.rules.map((rule) => ({ ...rule })),
   }));
   const [exclusionNotice, setExclusionNotice] = useState("");
   const [exclusionEditorOpen, setExclusionEditorOpen] = useState(false);
+  const exclusionDraftBaseRef = useRef(JSON.stringify({ mode: savedExclusions.mode, rules: savedExclusions.rules }));
+  const [exclusionPanelOpen, setExclusionPanelOpen] = useState(() => {
+    try { return localStorage.getItem(WEBSITE_SEARCH_EXCLUSIONS_PANEL_STORAGE_KEY) !== "closed"; }
+    catch { return true; }
+  });
+  const [cloudKeyDraft, setCloudKeyDraft] = useState("");
+  const savedConditionCount = savedExclusions.rules.length;
+
+  useEffect(() => {
+    try { localStorage.setItem(WEBSITE_SEARCH_EXCLUSIONS_PANEL_STORAGE_KEY, exclusionPanelOpen ? "open" : "closed"); } catch {}
+  }, [exclusionPanelOpen]);
+
+  // Reload cloud changes only when no draft modifications are in progress.
+  // A changed server revision cannot silently overwrite the user's draft.
+  useEffect(() => {
+    setExclusionDraft((draft) => {
+      const currentDraft = JSON.stringify({ mode: draft.mode, rules: draft.rules });
+      const edited = exclusionEditorOpen && currentDraft !== exclusionDraftBaseRef.current;
+      if (edited) return draft;
+      exclusionDraftBaseRef.current = JSON.stringify({ mode: savedExclusions.mode, rules: savedExclusions.rules });
+      return { mode: savedExclusions.mode, rules: savedExclusions.rules.map((r) => ({ ...r })) };
+    });
+  }, [savedExclusions]);
+
+  function toggleExclusionEditor() {
+    if (!exclusionEditorOpen) {
+      exclusionDraftBaseRef.current = JSON.stringify({ mode: savedExclusions.mode, rules: savedExclusions.rules });
+      setExclusionDraft({ mode: savedExclusions.mode, rules: savedExclusions.rules.map((r) => ({ ...r })) });
+    }
+    setExclusionEditorOpen((open) => !open);
+  }
 
   const exclusionFieldOptions = useMemo(() => {
     const selected = new Set(WEBSITE_SEARCH_EXCLUSION_FIELDS.map((option) => option.value));
@@ -10824,40 +10995,46 @@ function WebsiteSearchesPanel({
     setExclusionDraft((prev) => ({ ...prev, rules: prev.rules.filter((rule) => rule.id !== id) }));
   }
 
-  function saveExclusionRules() {
+  async function saveExclusionRules() {
+    const currentSavedRules = JSON.stringify({ mode: savedExclusions.mode, rules: savedExclusions.rules });
+    if (currentSavedRules !== exclusionDraftBaseRef.current) {
+      setExclusionNotice("Shared rules changed on another computer while you were editing. Use Discard unsaved edits to load the newest rules before saving.");
+      return;
+    }
     const rules = exclusionDraft.rules.map((rule) => ({ ...rule, value: rule.value.trim() }));
     if (rules.some((rule) => !rule.field || !rule.value)) {
       setExclusionNotice("Each condition needs a field and a value. Complete or remove any blank conditions before saving.");
       return;
     }
-    const next = {
-      mode: exclusionDraft.mode,
-      rules,
-      enabled: rules.length > 0, // Save and apply; Show all remains available.
-    };
-    if (updateSavedExclusions(next)) {
+    const next = { mode: exclusionDraft.mode, rules, enabled: rules.length > 0 };
+    const success = await updateSavedExclusions(next);
+    if (success) {
+      exclusionDraftBaseRef.current = JSON.stringify({ mode: next.mode, rules });
       setExclusionDraft({ mode: next.mode, rules: rules.map((rule) => ({ ...rule })) });
       setExclusionNotice(rules.length
-        ? "Saved to this browser and applied. Use Show all to temporarily disable exclusions."
-        : "All saved conditions cleared.");
+        ? "Saved and applied. You can pause exclusions without deleting rules."
+        : "All conditions cleared and saved.");
     } else {
-      setExclusionNotice("Unable to save rules in this browser. Check that local storage is enabled.");
+      setExclusionNotice("Save unsuccessful. Your edits are still here; check the Cloud Sync status.");
     }
   }
 
-  function toggleSavedExclusions() {
+  async function toggleSavedExclusions() {
     if (!savedExclusions.rules.length) {
+      setExclusionPanelOpen(true);
       setExclusionEditorOpen(true);
       setExclusionNotice("Add and save a condition first.");
       return;
     }
     const enabled = !savedExclusions.enabled;
-    setExclusionNotice(updateSavedExclusions({ ...savedExclusions, enabled })
-      ? enabled ? "Saved exclusions are active again." : "Showing all records. Your saved exclusions are retained."
-      : "Unable to save your preference in this browser.");
+    const success = await updateSavedExclusions({ ...savedExclusions, enabled });
+    setExclusionNotice(success
+      ? enabled ? "Saved exclusions are active again." : "Showing all records. Saved conditions are retained."
+      : "Could not update the saved status. Check Cloud Sync before trying again.");
   }
 
   function revertExclusionDraft() {
+    exclusionDraftBaseRef.current = JSON.stringify({ mode: savedExclusions.mode, rules: savedExclusions.rules });
     setExclusionDraft({
       mode: savedExclusions.mode,
       rules: savedExclusions.rules.map((rule) => ({ ...rule })),
@@ -10983,24 +11160,72 @@ function WebsiteSearchesPanel({
         </div>
       </div>
 
-      <div className="card" style={{ marginTop: 14, padding: 14, background: "rgba(255,255,255,0.035)", border: "1px solid rgba(34,197,94,0.22)" }}>
+      <div className="card" style={{ marginTop: 14, padding: 14,
+        background: savedConditionCount ? "rgba(20,184,166,0.11)" : "rgba(255,255,255,0.035)",
+        border: savedConditionCount ? "1px solid rgba(45,212,191,0.65)" : "1px solid rgba(255,255,255,0.11)",
+        boxShadow: savedConditionCount ? "0 0 0 1px rgba(20,184,166,0.07)" : "none",
+      }}>
         <div className="cardTitleRow" style={{ gap: 12 }}>
           <div>
-            <div className="cardTitle" style={{ fontSize: 16 }}>Custom search exclusions</div>
+            <div className="cardTitle" style={{ fontSize: 16 }}>
+              Custom search exclusions {savedConditionCount ? `• ${savedConditionCount} saved` : "• no rules"}
+            </div>
             <div className="mutedSmall">
-              Saved in this browser and restored when you return. No S3 records are deleted or changed.
+              {savedConditionCount
+                ? `${savedExclusions.enabled ? "Active" : "Paused"} • ${savedExclusions.mode === "all" ? "AND" : "OR"} conditions • ${formatNumberCompact(exclusionCount)} rows excluded`
+                : "No conditions saved. All loaded searches are visible."}
+              {cloudSyncConfigured ? " • Shared cloud settings" : " • Saved in this browser"}
             </div>
           </div>
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-            <button className="btnSecondary" type="button" onClick={() => setExclusionEditorOpen((prev) => !prev)}>
-              {exclusionEditorOpen ? "Close rule editor" : `Edit saved rules (${savedExclusions.rules.length})`}
+            <button className="btnSecondary" type="button" aria-expanded={exclusionPanelOpen}
+              onClick={() => setExclusionPanelOpen((open) => !open)}>
+              {exclusionPanelOpen ? "− Minimize" : "+ Maximize"}
             </button>
             <button className={savedExclusions.enabled ? "btnSecondary" : "btnPrimary"} type="button"
-              onClick={toggleSavedExclusions} disabled={!savedExclusions.rules.length}>
+              onClick={toggleSavedExclusions} disabled={!savedConditionCount}>
               {savedExclusions.enabled ? "Show all (pause exclusions)" : "Apply saved exclusions"}
             </button>
           </div>
         </div>
+        {exclusionPanelOpen ? (<> 
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 9 }}>
+            <button className="btnSecondary" type="button" onClick={toggleExclusionEditor}>
+              {exclusionEditorOpen ? "Close rule editor" : `Edit saved rules (${savedConditionCount})`}
+            </button>
+          </div>
+          <div className="card" style={{ marginTop: 12, padding: 12, background: "rgba(0,0,0,0.12)" }}>
+            <div className="mutedSmall" style={{ fontWeight: 650 }}>Cross-computer synchronization</div>
+            {!cloudSyncConfigured ? (
+              <div className="mutedSmall" style={{ marginTop: 5 }}>
+                Cloud sync is not set up yet. Configure VITE_WEBSITE_EXCLUSIONS_SYNC_API in Amplify after creating the protected AWS settings endpoint. Rules will keep working locally meanwhile.
+              </div>
+            ) : cloudSyncKeyPresent ? (
+              <div style={{ marginTop: 8 }}>
+                <div className="mutedSmall">
+                  {cloudSyncStatus.state === "synced" ? "✓ " : ""}
+                  {cloudSyncStatus.message || "Connected. This browser loads the shared rules whenever you open the page."}
+                </div>
+                <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 9 }}>
+                  <button className="btnSecondary" type="button" onClick={syncCloudNow}>Sync now</button>
+                  <button className="btnSecondary" type="button" onClick={disconnectCloudSync}>Disconnect this browser</button>
+                </div>
+              </div>
+            ) : (
+              <div style={{ marginTop: 8 }}>
+                <div className="mutedSmall">Enter the private settings access key once per computer. The key is remembered in this browser so rules automatically synchronize on later visits.</div>
+                <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 8 }}>
+                  <input className="input inputSm" type="password" autoComplete="off" style={{ flex: "1 1 240px" }}
+                    value={cloudKeyDraft} placeholder="Private settings sync access key"
+                    onChange={(e) => setCloudKeyDraft(e.target.value)} />
+                  <button className="btnPrimary" type="button" onClick={() => {
+                    if (connectCloudSync(cloudKeyDraft)) setCloudKeyDraft("");
+                  }}>Connect cloud sync</button>
+                </div>
+                {cloudSyncStatus.message ? <div className="mutedSmall" style={{ marginTop: 6 }}>{cloudSyncStatus.message}</div> : null}
+              </div>
+            )}
+          </div>
         <div style={{ display: "flex", gap: 10, marginTop: 12, flexWrap: "wrap" }} role="status" aria-live="polite">
           <span className="mutedSmall">Loaded: <strong>{formatNumberCompact(totalFetchedCount)}</strong></span>
           <span className="mutedSmall">Excluded: <strong>{formatNumberCompact(exclusionCount)}</strong></span>
@@ -11076,13 +11301,20 @@ function WebsiteSearchesPanel({
             </div>
             <div className="mutedSmall" style={{ marginTop: 10 }}>
               Saving applies the rules immediately. The Show all button pauses them without removing any conditions.
-              Rules are kept only in this browser profile; they will not automatically sync to other devices.
+              {cloudSyncConfigured
+                ? "With cloud sync connected, changes are saved centrally and retrieved automatically on your other connected computers."
+                : "Cloud sync must be configured for cross-computer updates. Until then rules are kept in this browser only."}
             </div>
           </div>
         ) : null}
         {exclusionNotice ? (
           <div className="mutedSmall" style={{ marginTop: 10 }} role="status" aria-live="polite">{exclusionNotice}</div>
         ) : null}
+        </>) : (
+          <div className="mutedSmall" style={{ marginTop: 7 }}>
+            {savedConditionCount ? "Rules retained — maximize to edit or check synchronization." : "Maximize to add exclusion conditions."}
+          </div>
+        )}
       </div>
 
       <div
