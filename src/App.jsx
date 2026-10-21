@@ -1673,6 +1673,78 @@ function getRawColumnValue(raw = {}, columnName = "") {
   return foundKey ? raw[foundKey] : "";
 }
 
+// Saved, client-side exclusion rules for the dedicated Website Searches tab.
+// These never change the S3 log or the API response: only the visible rows.
+const WEBSITE_SEARCH_EXCLUSIONS_STORAGE_KEY = "rbr_website_search_exclusions_v1";
+const WEBSITE_SEARCH_EXCLUSION_FIELDS = [
+  { value: "email", label: "Email" },
+  { value: "phone", label: "Phone" },
+  { value: "ip", label: "IP address" },
+  { value: "query", label: "Website search" },
+  { value: "date", label: "Date" },
+  { value: "city", label: "City" },
+  { value: "state", label: "State" },
+  { value: "country", label: "Country" },
+  { value: "pincode", label: "Pincode" },
+  { value: "device", label: "Device" },
+  { value: "source", label: "Source" },
+  { value: "timestamp", label: "Timestamp" },
+];
+
+function normalizeWebsiteSearchExclusionSettings(value) {
+  const input = value && typeof value === "object" ? value : {};
+  const supportedOperators = new Set(["equals", "contains", "startsWith", "endsWith"]);
+  const rules = Array.isArray(input.rules) ? input.rules : [];
+  return {
+    enabled: Boolean(input.enabled),
+    mode: input.mode === "all" ? "all" : "any",
+    rules: rules.slice(0, 50).map((rule, i) => ({
+      id: String(rule?.id || `rule-${i}`),
+      field: String(rule?.field || "email"),
+      operator: supportedOperators.has(rule?.operator) ? rule.operator : "equals",
+      value: String(rule?.value ?? "").trim(),
+    })).filter((rule) => rule.field && rule.value),
+  };
+}
+
+function loadWebsiteSearchExclusions() {
+  try {
+    const saved = localStorage.getItem(WEBSITE_SEARCH_EXCLUSIONS_STORAGE_KEY);
+    return normalizeWebsiteSearchExclusionSettings(saved ? JSON.parse(saved) : {});
+  } catch {
+    return normalizeWebsiteSearchExclusionSettings({});
+  }
+}
+
+function searchExplorerMatchesExclusionRule(item, rule) {
+  if (!rule?.field || !String(rule?.value || "").trim()) return false;
+  const rawValue = rule.field.startsWith("raw:")
+    ? getRawColumnValue(item.raw, rule.field.slice(4))
+    : item?.[rule.field];
+  const candidate = String(rawValue ?? "").trim().toLocaleLowerCase();
+  const expected = String(rule.value).trim().toLocaleLowerCase();
+  if (rule.operator === "contains") return candidate.includes(expected);
+  if (rule.operator === "startsWith") return candidate.startsWith(expected);
+  if (rule.operator === "endsWith") return candidate.endsWith(expected);
+  return candidate === expected;
+}
+
+function searchExplorerItemIsExcluded(item, settings) {
+  if (!settings?.enabled || !settings?.rules?.length) return false;
+  return settings.mode === "all"
+    ? settings.rules.every((rule) => searchExplorerMatchesExclusionRule(item, rule))
+    : settings.rules.some((rule) => searchExplorerMatchesExclusionRule(item, rule));
+}
+
+function newWebsiteSearchExclusionRule() {
+  return {
+    id: `exclude_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+    field: "email",
+    operator: "equals",
+    value: "",
+  };
+}
+
 function getSearchExplorerLocation(item = {}) {
   return [item.city, item.state, item.country].filter(Boolean).join(", ") || "Unknown location";
 }
@@ -2207,6 +2279,7 @@ export default function App() {
   const [searchExplorerAppliedRange, setSearchExplorerAppliedRange] = useState(null);
   const [searchExplorerFetchProgress, setSearchExplorerFetchProgress] = useState(null);
   const [searchExplorerSearch, setSearchExplorerSearch] = useState("");
+  const [savedWebsiteSearchExclusions, setSavedWebsiteSearchExclusions] = useState(loadWebsiteSearchExclusions);
   const [searchExplorerGroupBy, setSearchExplorerGroupBy] = useState("ip");
   const [expandedSearchExplorerGroups, setExpandedSearchExplorerGroups] = useState({});
   const [expandedSearchExplorerRows, setExpandedSearchExplorerRows] = useState({});
@@ -2521,9 +2594,17 @@ export default function App() {
     return summarizeGoogleAdsHierarchy(filteredGoogleAdsCampaigns);
   }, [filteredGoogleAdsCampaigns]);
 
+  // Apply saved exclusions before ordinary keyword searching or grouping.
+  // Keep all fetched rows intact so Show all instantly restores every row.
+  const searchExplorerAfterExclusions = useMemo(() => {
+    return searchExplorerItems.filter((item) => !searchExplorerItemIsExcluded(item, savedWebsiteSearchExclusions));
+  }, [searchExplorerItems, savedWebsiteSearchExclusions]);
+
+  const searchExplorerExcludedCount = searchExplorerItems.length - searchExplorerAfterExclusions.length;
+
   const filteredSearchExplorerItems = useMemo(() => {
-    return searchExplorerItems.filter((item) => searchExplorerMatches(item, searchExplorerSearch));
-  }, [searchExplorerItems, searchExplorerSearch]);
+    return searchExplorerAfterExclusions.filter((item) => searchExplorerMatches(item, searchExplorerSearch));
+  }, [searchExplorerAfterExclusions, searchExplorerSearch]);
 
   const searchExplorerGroupOptions = useMemo(() => {
     return buildSearchExplorerGroupOptions(searchExplorerColumns);
@@ -3997,6 +4078,17 @@ export default function App() {
       ...prev,
       [adGroupId]: !prev[adGroupId],
     }));
+  }
+
+  function updateSavedWebsiteSearchExclusions(nextSettings) {
+    const normalized = normalizeWebsiteSearchExclusionSettings(nextSettings);
+    try {
+      localStorage.setItem(WEBSITE_SEARCH_EXCLUSIONS_STORAGE_KEY, JSON.stringify(normalized));
+      setSavedWebsiteSearchExclusions(normalized);
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   async function loadWebsiteSearches(requestedRange = null) {
@@ -6148,6 +6240,11 @@ export default function App() {
                 groupedItems={groupedSearchExplorerItems}
                 columns={searchExplorerColumns}
                 summary={searchExplorerSummary}
+                totalFetchedCount={searchExplorerItems.length}
+                totalAfterExclusions={searchExplorerAfterExclusions.length}
+                exclusionCount={searchExplorerExcludedCount}
+                savedExclusions={savedWebsiteSearchExclusions}
+                updateSavedExclusions={updateSavedWebsiteSearchExclusions}
                 loading={searchExplorerLoading}
                 error={searchExplorerError}
                 dateFrom={searchExplorerFromDate}
@@ -10648,6 +10745,11 @@ function WebsiteSearchesPanel({
   groupedItems,
   columns,
   summary,
+  totalFetchedCount,
+  totalAfterExclusions,
+  exclusionCount,
+  savedExclusions,
+  updateSavedExclusions,
   loading,
   error,
   dateFrom,
@@ -10674,6 +10776,94 @@ function WebsiteSearchesPanel({
   copyToClipboard,
 }) {
   const [visibleRawColumns, setVisibleRawColumns] = useState([]);
+  // Draft rules can be edited without altering what's currently on screen.
+  // Only Save applies them and writes them to this browser's localStorage.
+  const [exclusionDraft, setExclusionDraft] = useState(() => ({
+    mode: savedExclusions.mode,
+    rules: savedExclusions.rules.map((rule) => ({ ...rule })),
+  }));
+  const [exclusionNotice, setExclusionNotice] = useState("");
+  const [exclusionEditorOpen, setExclusionEditorOpen] = useState(false);
+
+  const exclusionFieldOptions = useMemo(() => {
+    const selected = new Set(WEBSITE_SEARCH_EXCLUSION_FIELDS.map((option) => option.value));
+    const rawFields = (columns || [])
+      .filter((column) => column && !selected.has(`raw:${column}`))
+      .map((column) => ({ value: `raw:${column}`, label: `Excel column: ${column}` }));
+    const options = [...WEBSITE_SEARCH_EXCLUSION_FIELDS, ...rawFields];
+    exclusionDraft.rules.forEach((rule) => {
+      if (!options.some((option) => option.value === rule.field)) {
+        options.push({ value: rule.field, label: rule.field });
+      }
+    });
+    return options;
+  }, [columns, exclusionDraft.rules]);
+
+  const exclusionHasUnsavedChanges =
+    exclusionDraft.mode !== savedExclusions.mode ||
+    JSON.stringify(exclusionDraft.rules) !== JSON.stringify(savedExclusions.rules);
+
+  function patchExclusionRule(id, patch) {
+    setExclusionNotice("");
+    setExclusionDraft((prev) => ({
+      ...prev,
+      rules: prev.rules.map((rule) => rule.id === id ? { ...rule, ...patch } : rule),
+    }));
+  }
+
+  function addExclusionRule() {
+    setExclusionNotice("");
+    setExclusionDraft((prev) => ({
+      ...prev,
+      rules: [...prev.rules, newWebsiteSearchExclusionRule()].slice(0, 50),
+    }));
+  }
+
+  function removeExclusionRule(id) {
+    setExclusionNotice("");
+    setExclusionDraft((prev) => ({ ...prev, rules: prev.rules.filter((rule) => rule.id !== id) }));
+  }
+
+  function saveExclusionRules() {
+    const rules = exclusionDraft.rules.map((rule) => ({ ...rule, value: rule.value.trim() }));
+    if (rules.some((rule) => !rule.field || !rule.value)) {
+      setExclusionNotice("Each condition needs a field and a value. Complete or remove any blank conditions before saving.");
+      return;
+    }
+    const next = {
+      mode: exclusionDraft.mode,
+      rules,
+      enabled: rules.length > 0, // Save and apply; Show all remains available.
+    };
+    if (updateSavedExclusions(next)) {
+      setExclusionDraft({ mode: next.mode, rules: rules.map((rule) => ({ ...rule })) });
+      setExclusionNotice(rules.length
+        ? "Saved to this browser and applied. Use Show all to temporarily disable exclusions."
+        : "All saved conditions cleared.");
+    } else {
+      setExclusionNotice("Unable to save rules in this browser. Check that local storage is enabled.");
+    }
+  }
+
+  function toggleSavedExclusions() {
+    if (!savedExclusions.rules.length) {
+      setExclusionEditorOpen(true);
+      setExclusionNotice("Add and save a condition first.");
+      return;
+    }
+    const enabled = !savedExclusions.enabled;
+    setExclusionNotice(updateSavedExclusions({ ...savedExclusions, enabled })
+      ? enabled ? "Saved exclusions are active again." : "Showing all records. Your saved exclusions are retained."
+      : "Unable to save your preference in this browser.");
+  }
+
+  function revertExclusionDraft() {
+    setExclusionDraft({
+      mode: savedExclusions.mode,
+      rules: savedExclusions.rules.map((rule) => ({ ...rule })),
+    });
+    setExclusionNotice("Unsaved edits discarded. Saved conditions are unchanged.");
+  }
 
   useEffect(() => {
     setVisibleRawColumns((prev) => {
@@ -10793,6 +10983,108 @@ function WebsiteSearchesPanel({
         </div>
       </div>
 
+      <div className="card" style={{ marginTop: 14, padding: 14, background: "rgba(255,255,255,0.035)", border: "1px solid rgba(34,197,94,0.22)" }}>
+        <div className="cardTitleRow" style={{ gap: 12 }}>
+          <div>
+            <div className="cardTitle" style={{ fontSize: 16 }}>Custom search exclusions</div>
+            <div className="mutedSmall">
+              Saved in this browser and restored when you return. No S3 records are deleted or changed.
+            </div>
+          </div>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            <button className="btnSecondary" type="button" onClick={() => setExclusionEditorOpen((prev) => !prev)}>
+              {exclusionEditorOpen ? "Close rule editor" : `Edit saved rules (${savedExclusions.rules.length})`}
+            </button>
+            <button className={savedExclusions.enabled ? "btnSecondary" : "btnPrimary"} type="button"
+              onClick={toggleSavedExclusions} disabled={!savedExclusions.rules.length}>
+              {savedExclusions.enabled ? "Show all (pause exclusions)" : "Apply saved exclusions"}
+            </button>
+          </div>
+        </div>
+        <div style={{ display: "flex", gap: 10, marginTop: 12, flexWrap: "wrap" }} role="status" aria-live="polite">
+          <span className="mutedSmall">Loaded: <strong>{formatNumberCompact(totalFetchedCount)}</strong></span>
+          <span className="mutedSmall">Excluded: <strong>{formatNumberCompact(exclusionCount)}</strong></span>
+          <span className="mutedSmall">Remaining: <strong>{formatNumberCompact(totalAfterExclusions)}</strong></span>
+          <span className="mutedSmall">Status: <strong>{savedExclusions.enabled && savedExclusions.rules.length ? "Active" : "Paused / off"}</strong></span>
+        </div>
+        {savedExclusions.rules.length > 0 && !exclusionEditorOpen ? (
+          <div className="mutedSmall" style={{ marginTop: 8 }}>
+            {savedExclusions.rules.length} saved condition(s), joined with {savedExclusions.mode === "all" ? "AND" : "OR"}.
+            {exclusionHasUnsavedChanges ? " There are unsaved editor changes." : ""}
+          </div>
+        ) : null}
+        {exclusionEditorOpen ? (
+          <div style={{ marginTop: 14, paddingTop: 12, borderTop: "1px solid rgba(255,255,255,0.10)" }}>
+            <div style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap", marginBottom: 10 }}>
+              <label style={{ display: "grid", gap: 5, flex: "0 1 280px" }}>
+                <span className="mutedSmall">Exclude a row when</span>
+                <select className="input inputSm" value={exclusionDraft.mode}
+                  onChange={(e) => { setExclusionDraft((prev) => ({ ...prev, mode: e.target.value })); setExclusionNotice(""); }}>
+                  <option value="any">ANY condition matches (OR)</option>
+                  <option value="all">ALL conditions match (AND)</option>
+                </select>
+              </label>
+              <div className="mutedSmall" style={{ flex: "1 1 300px" }}>
+                OR excludes a row if either email or phone matches. AND excludes it only when both match the same row.
+              </div>
+            </div>
+            {exclusionDraft.rules.map((rule, index) => (
+              <div key={rule.id} style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "end", marginBottom: 10 }}>
+                <label style={{ display: "grid", gap: 4, flex: "1 1 170px", minWidth: 150 }}>
+                  <span className="mutedSmall">Condition {index + 1} — Field</span>
+                  <select className="input inputSm" value={rule.field}
+                    onChange={(e) => patchExclusionRule(rule.id, { field: e.target.value })}>
+                    {exclusionFieldOptions.map((option) => (
+                      <option key={option.value} value={option.value}>{option.label}</option>
+                    ))}
+                  </select>
+                </label>
+                <label style={{ display: "grid", gap: 4, flex: "0 1 160px", minWidth: 140 }}>
+                  <span className="mutedSmall">Comparison</span>
+                  <select className="input inputSm" value={rule.operator}
+                    onChange={(e) => patchExclusionRule(rule.id, { operator: e.target.value })}>
+                    <option value="equals">Equals</option>
+                    <option value="contains">Contains</option>
+                    <option value="startsWith">Starts with</option>
+                    <option value="endsWith">Ends with</option>
+                  </select>
+                </label>
+                <label style={{ display: "grid", gap: 4, flex: "2 1 230px", minWidth: 190 }}>
+                  <span className="mutedSmall">Value</span>
+                  <input className="input inputSm" type="text" value={rule.value}
+                    placeholder={rule.field === "email" ? "example@company.com" : rule.field === "phone" ? "+91…" : "Enter value"}
+                    onChange={(e) => patchExclusionRule(rule.id, { value: e.target.value })} />
+                </label>
+                <button className="btnSecondary" type="button" onClick={() => removeExclusionRule(rule.id)}>
+                  Remove
+                </button>
+              </div>
+            ))}
+            {!exclusionDraft.rules.length ? (
+              <div className="mutedSmall" style={{ marginBottom: 10 }}>No conditions yet. Add a condition to begin.</div>
+            ) : null}
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+              <button className="btnSecondary" type="button" onClick={addExclusionRule} disabled={exclusionDraft.rules.length >= 50}>
+                + Add condition
+              </button>
+              <button className="btnPrimary" type="button" onClick={saveExclusionRules}>
+                Save and apply rules
+              </button>
+              <button className="btnSecondary" type="button" onClick={revertExclusionDraft} disabled={!exclusionHasUnsavedChanges}>
+                Discard unsaved edits
+              </button>
+            </div>
+            <div className="mutedSmall" style={{ marginTop: 10 }}>
+              Saving applies the rules immediately. The Show all button pauses them without removing any conditions.
+              Rules are kept only in this browser profile; they will not automatically sync to other devices.
+            </div>
+          </div>
+        ) : null}
+        {exclusionNotice ? (
+          <div className="mutedSmall" style={{ marginTop: 10 }} role="status" aria-live="polite">{exclusionNotice}</div>
+        ) : null}
+      </div>
+
       <div
         style={{
           display: "grid",
@@ -10888,8 +11180,18 @@ function WebsiteSearchesPanel({
       {!loading && !error && !items.length ? (
         <div className="empty fancyEmpty" style={{ marginTop: 12 }}>
           <div className="emptyIcon">🧾</div>
-          <div className="emptyTitle">No website searches in this period</div>
-          <div className="mutedSmall">Select a different date range to retrieve records from the dedicated S3 search-log API.</div>
+          <div className="emptyTitle">
+            {totalFetchedCount && totalAfterExclusions === 0 && exclusionCount
+              ? "All search rows excluded by your saved rules"
+              : totalFetchedCount
+              ? "No searches match the text filter"
+              : "No website searches in this period"}
+          </div>
+          <div className="mutedSmall">
+            {totalFetchedCount
+              ? "Use Show all to pause saved exclusions, or clear the text search to see more rows."
+              : "Select a different date range to retrieve records from the dedicated S3 search-log API."}
+          </div>
         </div>
       ) : null}
 
