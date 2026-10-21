@@ -1685,26 +1685,6 @@ function getRawColumnValue(raw = {}, columnName = "") {
 // These never change the S3 log or the API response: only the visible rows.
 const WEBSITE_SEARCH_EXCLUSIONS_STORAGE_KEY = "rbr_website_search_exclusions_v1";
 const WEBSITE_SEARCH_EXCLUSIONS_PANEL_STORAGE_KEY = "rbr_website_search_exclusions_panel_open_v1";
-const WEBSITE_SEARCH_EXCLUSIONS_CLOUD_KEY_STORAGE_KEY = "rbr_website_search_exclusions_sync_key_v1";
-
-function loadWebsiteSearchExclusionsCloudKey() {
-  try { return localStorage.getItem(WEBSITE_SEARCH_EXCLUSIONS_CLOUD_KEY_STORAGE_KEY) || ""; }
-  catch { return ""; }
-}
-
-// Safe diagnostic identifier: only the first 12 hex characters of the SHA-256
-// digest of the high-entropy access key. Never display or log the actual key.
-async function websiteExclusionsKeyFingerprint(secret) {
-  try {
-    const encoded = new TextEncoder().encode(secret);
-    const digest = await window.crypto.subtle.digest("SHA-256", encoded);
-    return Array.from(new Uint8Array(digest)).slice(0, 6)
-      .map((byte) => byte.toString(16).padStart(2, "0")).join("");
-  } catch {
-    return "not available";
-  }
-}
-
 function persistWebsiteSearchExclusionsLocally(settings) {
   try {
     localStorage.setItem(WEBSITE_SEARCH_EXCLUSIONS_STORAGE_KEY, JSON.stringify(settings));
@@ -2146,8 +2126,7 @@ export default function App() {
   const WEBSITE_SEARCHES_API = import.meta.env.VITE_WEBSITE_SEARCHES_API ||
     "https://jp1bupouyl.execute-api.ap-south-1.amazonaws.com/prod/website-searches/list";
   // Separate protected settings API. The search logs continue using their dedicated endpoint.
-  const WEBSITE_EXCLUSIONS_SYNC_API = import.meta.env.VITE_WEBSITE_EXCLUSIONS_SYNC_API || "";
-  // Isolated, Cognito-only route: existing key-based sync remains untouched during pilot.
+  // Cognito-only synchronization. Legacy shared-key API is deliberately not referenced.
   const WEBSITE_EXCLUSIONS_COGNITO_PILOT_API = import.meta.env.VITE_WEBSITE_EXCLUSIONS_COGNITO_PILOT_API ||
     "https://jp1bupouyl.execute-api.ap-south-1.amazonaws.com/rbr-cognito-pilot/website-searches/exclusions-cognito-test";
   const BULK_REPORTS_API = import.meta.env.VITE_BULK_REPORTS_API || "";
@@ -2320,13 +2299,12 @@ export default function App() {
   const [searchExplorerFetchProgress, setSearchExplorerFetchProgress] = useState(null);
   const [searchExplorerSearch, setSearchExplorerSearch] = useState("");
   const [savedWebsiteSearchExclusions, setSavedWebsiteSearchExclusions] = useState(loadWebsiteSearchExclusions);
-  const [exclusionSyncKey, setExclusionSyncKey] = useState(loadWebsiteSearchExclusionsCloudKey);
   const [rbrCognito, setRbrCognito] = useState({
     status: cognitoPilotIsConfigured ? "checking" : "unconfigured", email: "", allowed: false,
   });
   const rbrCognitoReady = rbrCognito.status === "authenticated" && rbrCognito.allowed;
-  const activeExclusionsApi = rbrCognitoReady ? WEBSITE_EXCLUSIONS_COGNITO_PILOT_API : WEBSITE_EXCLUSIONS_SYNC_API;
-  const exclusionsHaveCredential = rbrCognitoReady || Boolean(exclusionSyncKey);
+  const activeExclusionsApi = WEBSITE_EXCLUSIONS_COGNITO_PILOT_API;
+  const exclusionsHaveCredential = rbrCognitoReady;
   const [exclusionSyncStatus, setExclusionSyncStatus] = useState({
     state: "idle", message: "", updatedAt: "",
   });
@@ -2364,11 +2342,8 @@ export default function App() {
   }
 
   async function cloudExclusionsAuthHeaders() {
-    if (rbrCognitoReady) return { Authorization: await getRbrCognitoIdToken() };
-    if (exclusionSyncKey) return { "x-rbr-settings-key": exclusionSyncKey };
-    throw new Error(cognitoPilotIsConfigured
-      ? "Sign in with your RBR management account to synchronize shared exclusions."
-      : "Connect the shared exclusion key before synchronizing.");
+    if (!rbrCognitoReady) throw new Error("Sign in with an authorized RBRReportsManagers account to synchronize shared exclusions.");
+    return { Authorization: await getRbrCognitoIdToken() };
   }
 
   const [searchExplorerGroupBy, setSearchExplorerGroupBy] = useState("ip");
@@ -2432,6 +2407,10 @@ export default function App() {
       window.removeEventListener("resize", apply);
       if (ro) ro.disconnect();
     };
+  }, []);
+
+  useEffect(() => {
+    try { localStorage.removeItem("rbr_website_search_exclusions_sync_key_v1"); } catch {}
   }, []);
 
   useEffect(() => saveHistory(history), [history]);
@@ -4171,84 +4150,19 @@ export default function App() {
     }));
   }
 
-  async function connectWebsiteExclusionsSync(key) {
-    const secret = String(key || "").trim();
-    if (secret.length < 20) {
-      setExclusionSyncStatus({ state: "error", message: "Enter the 20+ character access key created when you deployed the settings API.", updatedAt: "" });
-      return false;
-    }
-    if (!WEBSITE_EXCLUSIONS_SYNC_API) {
-      setExclusionSyncStatus({ state: "error", message: "Cloud sync API URL is not configured in Amplify.", updatedAt: "" });
-      return false;
-    }
-    // Validate the exact key against the live cloud API BEFORE saving it to
-    // this browser. Never display, persist to logs, or send the key to another host.
-    setExclusionSyncStatus({ state: "connecting", message: "Testing the cloud access key…", updatedAt: "" });
-    const fingerprint = await websiteExclusionsKeyFingerprint(secret);
-    try {
-      const { res, data } = await fetchJson(WEBSITE_EXCLUSIONS_SYNC_API, {
-        method: "GET",
-        headers: { "Accept": "application/json", "x-rbr-settings-key": secret },
-        cache: "no-store",
-      });
-      if (!res.ok || data?.ok === false) {
-        setExclusionSyncStatus({
-          state: "error",
-          message: `Connection test: HTTP ${res.status}. Entered key has ${secret.length} characters; fingerprint ${fingerprint}. Compare these with the CloudShell diagnostic below. ${data?.error || ""}`,
-          updatedAt: "",
-        });
-        return false;
-      }
-      try { localStorage.setItem(WEBSITE_SEARCH_EXCLUSIONS_CLOUD_KEY_STORAGE_KEY, secret); }
-      catch {
-        setExclusionSyncStatus({ state: "error", message: "Browser could not remember the access key.", updatedAt: "" });
-        return false;
-      }
-      exclusionCloudVersionRef.current = Number(data.version || 0);
-      setExclusionSyncKey(secret);
-      setExclusionSyncStatus({ state: "connecting", message: "Access key verified (HTTP 200). Loading/saving cloud rules…", updatedAt: "" });
-      return true;
-    } catch (err) {
-      setExclusionSyncStatus({
-        state: "error",
-        message: `Connection test could not reach the cloud API: ${err?.message || "network or CORS error"}. Key length ${secret.length}, fingerprint ${fingerprint}.`,
-        updatedAt: "",
-      });
-      return false;
-    }
-  }
-
-  function disconnectWebsiteExclusionsSync() {
-    try { localStorage.removeItem(WEBSITE_SEARCH_EXCLUSIONS_CLOUD_KEY_STORAGE_KEY); } catch {}
-    setExclusionSyncKey("");
-    if (rbrCognitoReady) {
-      // The Cognito session stays active: forgetting the obsolete key must not
-      // reset the current DynamoDB version or break the authenticated pilot.
-      setExclusionSyncStatus({ state: "synced", message: "Old key forgotten. Cognito synchronization remains connected.", updatedAt: "" });
-      return;
-    }
-    exclusionCloudVersionRef.current = 0;
-    setExclusionSyncStatus({ state: "idle", message: "This browser is disconnected. Existing local rules are preserved.", updatedAt: "" });
-  }
-
   async function updateSavedWebsiteSearchExclusions(nextSettings) {
     const normalized = normalizeWebsiteSearchExclusionSettings(nextSettings);
-    if (!activeExclusionsApi && !cognitoPilotIsConfigured) {
-      if (!persistWebsiteSearchExclusionsLocally(normalized)) return false;
-      savedExclusionsRef.current = normalized;
-      setSavedWebsiteSearchExclusions(normalized);
-      return true;
+    if (!cognitoPilotIsConfigured || !activeExclusionsApi) {
+      setExclusionSyncStatus({ state: "error", message: "Cognito synchronization is not configured. Cloud rules have not changed.", updatedAt: "" });
+      return false;
     }
-    if (!exclusionsHaveCredential || !activeExclusionsApi) {
-      setExclusionSyncStatus({ state: "error", message: cognitoPilotIsConfigured
-        ? "Sign in with your RBR management account before saving cloud rules. Your draft is unchanged."
-        : "Connect the secure cloud sync key before saving. Your draft is unchanged.", updatedAt: "" });
+    if (!exclusionsHaveCredential) {
+      setExclusionSyncStatus({ state: "error", message: "Sign in with an authorized RBRReportsManagers account before saving cloud rules. Your draft is unchanged.", updatedAt: "" });
       return false;
     }
     if (exclusionCloudSavingRef.current) return false;
     exclusionCloudSavingRef.current = true;
-    setExclusionSyncStatus({ state: "saving", message: rbrCognitoReady
-      ? "Saving rules through Cognito authorization…" : "Saving rules to AWS…", updatedAt: "" });
+    setExclusionSyncStatus({ state: "saving", message: "Saving rules through Cognito authorization…", updatedAt: "" });
     try {
       const authHeaders = await cloudExclusionsAuthHeaders();
       const { res, data } = await fetchJson(activeExclusionsApi, {
@@ -4266,9 +4180,7 @@ export default function App() {
       persistWebsiteSearchExclusionsLocally(normalized);
       savedExclusionsRef.current = normalized;
       setSavedWebsiteSearchExclusions(normalized);
-      setExclusionSyncStatus({ state: "synced", message: rbrCognitoReady
-        ? "Saved securely using your RBR login; shared rules synchronized."
-        : "Saved and synchronized across connected browsers.", updatedAt: data.updatedAt || new Date().toISOString() });
+      setExclusionSyncStatus({ state: "synced", message: "Saved securely using your RBR login; shared rules synchronized.", updatedAt: data.updatedAt || new Date().toISOString() });
       return true;
     } catch (err) {
       setExclusionSyncStatus({ state: "error", message: err?.message || "Could not save cloud rules.", updatedAt: "" });
@@ -4291,33 +4203,18 @@ export default function App() {
       if (!res.ok || data?.ok === false) {
         if (rbrCognitoReady && [401, 403].includes(res.status)) throw new Error(
           `Cognito authorization returned HTTP ${res.status}. Confirm RBRReportsManagers group membership and renew sign-in if necessary.`);
-        const fingerprint = !rbrCognitoReady && res.status === 401
-          ? await websiteExclusionsKeyFingerprint(exclusionSyncKey) : "";
-        throw new Error(!rbrCognitoReady && res.status === 401
-          ? `Cloud key rejected (HTTP 401). Saved key: ${exclusionSyncKey.length} characters, fingerprint ${fingerprint}. Disconnect and reconnect if necessary.`
-          : buildErrorMessage(res, data, `Could not load cloud rules (HTTP ${res.status})`));
+        throw new Error(buildErrorMessage(res, data, `Could not load Cognito cloud rules (HTTP ${res.status})`));
       }
       const version = Number(data.version || 0);
       exclusionCloudVersionRef.current = version;
       if (data.exists === false) {
-        if (rbrCognitoReady) {
-          throw new Error("Cognito test endpoint returned no saved cloud record. Pilot will not migrate or overwrite local rules automatically.");
-        }
-        // Preserve legacy first-time cloud migration only for the old key route.
-        const local = savedExclusionsRef.current;
-        if (local.rules.length) {
-          exclusionCloudBusyRef.current = false;
-          await updateSavedWebsiteSearchExclusions(local);
-          return;
-        }
+        throw new Error("Cognito endpoint returned no saved cloud record. Existing browser rules are preserved; no overwrite was attempted.");
       }
       const remote = normalizeWebsiteSearchExclusionSettings(data.settings);
       persistWebsiteSearchExclusionsLocally(remote);
       savedExclusionsRef.current = remote;
       setSavedWebsiteSearchExclusions(remote);
-      setExclusionSyncStatus({ state: "synced", message: rbrCognitoReady
-        ? "✓ Cognito login verified. Cloud rules are up to date."
-        : "Cloud rules are up to date.", updatedAt: data.updatedAt || "" });
+      setExclusionSyncStatus({ state: "synced", message: "✓ Cognito login verified. Cloud rules are up to date.", updatedAt: data.updatedAt || "" });
     } catch (err) {
       setExclusionSyncStatus({ state: "error", message: err?.message || "Unable to fetch cloud rules.", updatedAt: "" });
     } finally {
@@ -4335,7 +4232,7 @@ export default function App() {
       window.removeEventListener("focus", onFocus);
       window.clearInterval(timer);
     };
-  }, [isWebsiteSearches, activeExclusionsApi, exclusionSyncKey, rbrCognitoReady]);
+  }, [isWebsiteSearches, activeExclusionsApi, rbrCognitoReady]);
 
   async function loadWebsiteSearches(requestedRange = null) {
     const chosen = requestedRange || searchExplorerAppliedRange || {
@@ -6491,18 +6388,13 @@ export default function App() {
                 exclusionCount={searchExplorerExcludedCount}
                 savedExclusions={savedWebsiteSearchExclusions}
                 updateSavedExclusions={updateSavedWebsiteSearchExclusions}
-                cloudSyncConfigured={Boolean(WEBSITE_EXCLUSIONS_SYNC_API) || cognitoPilotIsConfigured}
-                cloudSyncApiUrl={activeExclusionsApi}
-                cloudSyncKeyPresent={exclusionsHaveCredential}
+                cloudSyncConfigured={cognitoPilotIsConfigured}
                 cognitoConfigured={cognitoPilotIsConfigured}
                 cognitoAuth={rbrCognito}
                 cognitoConnected={rbrCognitoReady}
-                oldKeyPresent={Boolean(exclusionSyncKey)}
                 signInCognito={beginCognitoPilotSignIn}
                 signOutCognito={endCognitoPilotSignIn}
                 cloudSyncStatus={exclusionSyncStatus}
-                connectCloudSync={connectWebsiteExclusionsSync}
-                disconnectCloudSync={disconnectWebsiteExclusionsSync}
                 syncCloudNow={fetchWebsiteExclusionsFromCloud}
                 loading={searchExplorerLoading}
                 error={searchExplorerError}
@@ -11010,17 +10902,12 @@ function WebsiteSearchesPanel({
   savedExclusions,
   updateSavedExclusions,
   cloudSyncConfigured,
-  cloudSyncApiUrl,
-  cloudSyncKeyPresent,
   cognitoConfigured,
   cognitoAuth,
   cognitoConnected,
-  oldKeyPresent,
   signInCognito,
   signOutCognito,
   cloudSyncStatus,
-  connectCloudSync,
-  disconnectCloudSync,
   syncCloudNow,
   loading,
   error,
@@ -11061,7 +10948,6 @@ function WebsiteSearchesPanel({
     try { return localStorage.getItem(WEBSITE_SEARCH_EXCLUSIONS_PANEL_STORAGE_KEY) !== "closed"; }
     catch { return true; }
   });
-  const [cloudKeyDraft, setCloudKeyDraft] = useState("");
   const savedConditionCount = savedExclusions.rules.length;
 
   useEffect(() => {
@@ -11330,24 +11216,21 @@ function WebsiteSearchesPanel({
             <div className="mutedSmall" style={{ fontWeight: 650 }}>Cross-computer synchronization</div>
             {cognitoConfigured ? (
               <div className="card" style={{ marginTop: 10, padding: 12, background: "rgba(20,184,166,0.06)", border: "1px solid rgba(45,212,191,0.32)" }}>
-                <div className="mutedSmall" style={{ fontWeight: 650 }}>RBR Cognito login — protected pilot</div>
+                <div className="mutedSmall" style={{ fontWeight: 650 }}>RBR Cognito — secure cloud synchronization</div>
                 {cognitoConnected ? (
                   <div style={{ marginTop: 7 }}>
-                    <div className="mutedSmall">✓ Signed in: {cognitoAuth.email} • RBRReportsManagers • No shared key needed</div>
+                    <div className="mutedSmall">✓ Signed in: {cognitoAuth.email} • RBRReportsManagers</div>
                     <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 9 }}>
                       <button className="btnSecondary" type="button" onClick={syncCloudNow}>Sync now with Cognito</button>
                       <button className="btnSecondary" type="button" onClick={signOutCognito}>Sign out of RBR</button>
-                      {oldKeyPresent ? <button className="btnSecondary" type="button" onClick={disconnectCloudSync}>Forget old shared key on this browser</button> : null}
                     </div>
                   </div>
                 ) : (
                   <div style={{ marginTop: 7 }}>
-                    <div className="mutedSmall">
-                      {cognitoAuth.status === "checking" ? "Checking existing RBR login…"
-                        : cognitoAuth.status === "authenticated" && !cognitoAuth.allowed
-                        ? `Signed in as ${cognitoAuth.email}, but not a member of RBRReportsManagers.`
-                        : cognitoAuth.message || "Sign in using your existing RBR management account to synchronize without the shared key."}
-                    </div>
+                    <div className="mutedSmall">{cognitoAuth.status === "checking" ? "Checking existing RBR login…"
+                      : cognitoAuth.status === "authenticated" && !cognitoAuth.allowed
+                      ? `Signed in as ${cognitoAuth.email}, but not a member of RBRReportsManagers.`
+                      : cognitoAuth.message || "Sign in using your RBR management account to synchronize cloud rules."}</div>
                     <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 9 }}>
                       <button className="btnPrimary" type="button" onClick={signInCognito}>Sign in with RBR</button>
                       {cognitoAuth.status === "authenticated" ? <button className="btnSecondary" type="button" onClick={signOutCognito}>Sign out</button> : null}
@@ -11355,42 +11238,12 @@ function WebsiteSearchesPanel({
                   </div>
                 )}
               </div>
-            ) : null}
-            {cognitoConnected ? null : !cloudSyncConfigured ? (
-              <div className="mutedSmall" style={{ marginTop: 5 }}>
-                Cloud sync is not set up yet. Configure VITE_WEBSITE_EXCLUSIONS_SYNC_API in Amplify after creating the protected AWS settings endpoint. Rules will keep working locally meanwhile.
-              </div>
-            ) : cloudSyncKeyPresent ? (
-              <div style={{ marginTop: 8 }}>
-                <div className="mutedSmall">
-                  {cloudSyncStatus.state === "synced" ? "✓ " : ""}
-                  {cloudSyncStatus.message || "Connected. This browser loads the shared rules whenever you open the page."}
-                </div>
-                {cloudSyncStatus.state === "error" ? <div className="mutedSmall" style={{ marginTop: 6, overflowWrap: "anywhere" }}>Configured cloud API: {cloudSyncApiUrl}</div> : null}
-                <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 9 }}>
-                  <button className="btnSecondary" type="button" onClick={syncCloudNow}>Sync now</button>
-                  <button className="btnSecondary" type="button" onClick={disconnectCloudSync}>Disconnect this browser</button>
-                </div>
-              </div>
             ) : (
-              <div style={{ marginTop: 8 }}>
-                <div className="mutedSmall">{cognitoConfigured
-                  ? "Temporary fallback: connect the old shared key only while the Cognito pilot is being tested."
-                  : "Enter the private settings access key once per computer. The key is remembered in this browser so rules automatically synchronize on later visits."}</div>
-                <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 8 }}>
-                  <input className="input inputSm" type="password" autoComplete="off" style={{ flex: "1 1 240px" }}
-                    value={cloudKeyDraft} placeholder="Private settings sync access key"
-                    onChange={(e) => setCloudKeyDraft(e.target.value)} />
-                  <button className="btnPrimary" type="button" onClick={() => {
-                    Promise.resolve(connectCloudSync(cloudKeyDraft)).then((success) => {
-                      if (success) setCloudKeyDraft("");
-                    });
-                  }}>Connect cloud sync</button>
-                </div>
-                {cloudSyncStatus.message ? <div className="mutedSmall" style={{ marginTop: 6 }}>{cloudSyncStatus.message}</div> : null}
-                {cloudSyncStatus.state === "error" ? <div className="mutedSmall" style={{ marginTop: 6, overflowWrap: "anywhere" }}>Configured cloud API: {cloudSyncApiUrl}</div> : null}
+              <div className="mutedSmall" style={{ marginTop: 8 }}>
+                Cognito synchronization is unavailable. Check the Cognito environment variables for rbrmain_employee.
               </div>
             )}
+            {cloudSyncStatus.message ? <div className="mutedSmall" style={{ marginTop: 8 }}>{cloudSyncStatus.message}</div> : null}
           </div>
         <div style={{ display: "flex", gap: 10, marginTop: 12, flexWrap: "wrap" }} role="status" aria-live="polite">
           <span className="mutedSmall">Loaded: <strong>{formatNumberCompact(totalFetchedCount)}</strong></span>
