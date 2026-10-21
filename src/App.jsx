@@ -1513,6 +1513,45 @@ function getSearchExplorerTimestamp(item = {}) {
   );
 }
 
+// Calendar dates are passed to the dedicated Website Searches Lambda as YYYY-MM-DD.
+// Use local calendar arithmetic for the default range (including today).
+function websiteSearchLocalDay(daysAgo = 0) {
+  const d = new Date();
+  d.setHours(12, 0, 0, 0);
+  d.setDate(d.getDate() - daysAgo);
+  const yy = d.getFullYear();
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  const dd = String(d.getDate()).padStart(2, "0");
+  return `${yy}-${mm}-${dd}`;
+}
+
+function websiteSearchShiftDay(day, days) {
+  const d = new Date(`${day}T12:00:00Z`);
+  if (Number.isNaN(d.getTime())) return "";
+  d.setUTCDate(d.getUTCDate() + days);
+  return d.toISOString().slice(0, 10);
+}
+
+// Fetch long date ranges in manageable monthly-sized windows. The Lambda's
+// existing MAX_FILES and MAX_ROWS limits therefore do not silently truncate
+// an otherwise valid multi-month search request.
+function websiteSearchDateWindows(startDate, endDate) {
+  const windows = [];
+  let first = startDate;
+  while (first <= endDate) {
+    const last = [websiteSearchShiftDay(first, 29), endDate].sort()[0];
+    windows.push({ startDate: first, endDate: last });
+    first = websiteSearchShiftDay(last, 1);
+  }
+  return windows;
+}
+
+function websiteSearchRowDay(item) {
+  // Preserve the calendar day recorded in the source (not the browser TZ).
+  const value = String(item?.date || item?.timestamp || item?.dateKey || "");
+  return /^\d{4}-\d{2}-\d{2}/.test(value) ? value.slice(0, 10) : "";
+}
+
 function normalizeSearchExplorerPayload(payload) {
   const parsed = unwrapApiPayload(payload);
   const rawItems = Array.isArray(parsed)
@@ -1996,7 +2035,9 @@ export default function App() {
   const TRAFFIC_INTELLIGENCE_API = import.meta.env.VITE_TRAFFIC_INTELLIGENCE_API || "";
   const GOOGLE_ADS_UPDATE_API = import.meta.env.VITE_GOOGLE_ADS_UPDATE_API || "";
   const GOOGLE_ADS_STRUCTURE_API = import.meta.env.VITE_GOOGLE_ADS_STRUCTURE_API || "";
-  const WEBSITE_SEARCHES_API = import.meta.env.VITE_WEBSITE_SEARCHES_API || TRAFFIC_INTELLIGENCE_API || "";
+  // Always use the original, dedicated Website Searches API (not Traffic Intelligence).
+  const WEBSITE_SEARCHES_API = import.meta.env.VITE_WEBSITE_SEARCHES_API ||
+    "https://jp1bupouyl.execute-api.ap-south-1.amazonaws.com/prod/website-searches/list";
   const BULK_REPORTS_API = import.meta.env.VITE_BULK_REPORTS_API || "";
   const USER_FUNNEL_API =
     import.meta.env.VITE_USER_FUNNEL_API ||
@@ -2161,6 +2202,10 @@ export default function App() {
   const [searchExplorerColumns, setSearchExplorerColumns] = useState([]);
   const [searchExplorerLoading, setSearchExplorerLoading] = useState(false);
   const [searchExplorerError, setSearchExplorerError] = useState("");
+  const [searchExplorerFromDate, setSearchExplorerFromDate] = useState(() => websiteSearchLocalDay(29));
+  const [searchExplorerToDate, setSearchExplorerToDate] = useState(() => websiteSearchLocalDay(0));
+  const [searchExplorerAppliedRange, setSearchExplorerAppliedRange] = useState(null);
+  const [searchExplorerFetchProgress, setSearchExplorerFetchProgress] = useState(null);
   const [searchExplorerSearch, setSearchExplorerSearch] = useState("");
   const [searchExplorerGroupBy, setSearchExplorerGroupBy] = useState("ip");
   const [expandedSearchExplorerGroups, setExpandedSearchExplorerGroups] = useState({});
@@ -3954,48 +3999,119 @@ export default function App() {
     }));
   }
 
-  async function loadWebsiteSearches() {
-    setSearchExplorerLoading(true);
-    setSearchExplorerError("");
+  async function loadWebsiteSearches(requestedRange = null) {
+    const chosen = requestedRange || searchExplorerAppliedRange || {
+      startDate: searchExplorerFromDate,
+      endDate: searchExplorerToDate,
+    };
+    const { startDate, endDate } = chosen;
+    const today = websiteSearchLocalDay();
 
-    if (!WEBSITE_SEARCHES_API) {
-      setSearchExplorerItems([]);
-      setSearchExplorerColumns([]);
-      setSearchExplorerMeta({ total: 0, source: "", lastUpdatedAt: "", dateRange: null });
-      setSearchExplorerLoading(false);
-      setSearchExplorerError(
-        "Missing env var: VITE_WEBSITE_SEARCHES_API. You can temporarily set it to the existing Traffic Intelligence list API if that response already includes website_searches."
-      );
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(startDate || "") ||
+        !/^\d{4}-\d{2}-\d{2}$/.test(endDate || "") ||
+        startDate > endDate || endDate > today) {
+      setSearchExplorerError("Select valid From and To dates. From must not be later than To, and future dates cannot be selected.");
       return;
     }
 
-    try {
-      const { res, data } = await fetchJson(WEBSITE_SEARCHES_API, {
-        method: "GET",
-        headers: { "Content-Type": "application/json" },
-      });
+    setSearchExplorerLoading(true);
+    setSearchExplorerError("");
+    setSearchExplorerItems([]);
+    setSearchExplorerColumns([]);
+    setSearchExplorerMeta({ total: 0, source: "", lastUpdatedAt: "", dateRange: null });
 
-      if (!res.ok || data?.ok === false) {
-        throw new Error(buildErrorMessage(res, data, "Website Searches API failed"));
+    try {
+      const windows = websiteSearchDateWindows(startDate, endDate);
+      const combinedRows = [];
+      const combinedColumns = new Set();
+      const seen = new Set();
+      const skippedFiles = [];
+      let fileCount = 0;
+      let dataSource = "";
+      let lastUpdatedAt = "";
+
+      for (let i = 0; i < windows.length; i += 1) {
+        setSearchExplorerFetchProgress({ current: i + 1, total: windows.length });
+        const win = windows[i];
+
+        // The logger's daily S3 file date may differ from the actual timestamp
+        // by one day around the UTC/India midnight boundary. Read adjacent
+        // log files, then filter back to the exact requested calendar days.
+        const url = new URL(WEBSITE_SEARCHES_API, window.location.href);
+        url.searchParams.set("start_date", websiteSearchShiftDay(win.startDate, -1));
+        url.searchParams.set("end_date", websiteSearchShiftDay(win.endDate, 1));
+
+        const { res, data } = await fetchJson(url.toString(), {
+          method: "GET",
+          headers: { Accept: "application/json" },
+        });
+        if (!res.ok || data?.ok === false) {
+          throw new Error(`Range ${win.startDate} to ${win.endDate}: ${buildErrorMessage(res, data, "Website Searches API failed")}`);
+        }
+
+        const parsed = unwrapApiPayload(data);
+        const recognized = Array.isArray(parsed) ||
+          ["items", "rows", "searches", "website_searches", "websiteSearches", "data"]
+            .some((key) => Array.isArray(parsed?.[key]));
+        if (!recognized) {
+          throw new Error(`Range ${win.startDate} to ${win.endDate}: The API returned no recognized search-record array.`);
+        }
+
+        // Normalize using the original website-search payload logic.
+        const normalized = normalizeSearchExplorerPayload(data);
+        (normalized.columns || []).forEach((col) => combinedColumns.add(col));
+        dataSource = normalized.source || dataSource;
+        lastUpdatedAt = normalized.lastUpdatedAt || lastUpdatedAt;
+        fileCount += Number(parsed?.files_seen || 0);
+        if (Array.isArray(parsed?.files_skipped)) skippedFiles.push(...parsed.files_skipped);
+
+        // Restrict by source calendar date, including the two endpoints.
+        // Incomplete/invalid source dates are not silently assigned to a day.
+        normalized.items.forEach((item) => {
+          const day = websiteSearchRowDay(item);
+          if (!day || day < win.startDate || day > win.endDate) return;
+          const raw = item.raw || {};
+          const dedupeKey = [raw.source_key || "", item.timestamp || "", item.query || "", item.ip || "", item.phone || "", item.email || ""].join("\u001f");
+          if (seen.has(dedupeKey)) return;
+          seen.add(dedupeKey);
+          combinedRows.push(item);
+        });
       }
 
-      const normalized = normalizeSearchExplorerPayload(data);
-      setSearchExplorerItems(normalized.items);
-      setSearchExplorerColumns(normalized.columns);
+      combinedRows.sort((a, b) => String(b.timestamp || b.date || "").localeCompare(String(a.timestamp || a.date || "")));
+      setSearchExplorerItems(combinedRows);
+      setSearchExplorerColumns([...combinedColumns]);
+      setSearchExplorerAppliedRange({ startDate, endDate });
       setSearchExplorerMeta({
-        total: normalized.total,
-        source: normalized.source,
-        lastUpdatedAt: normalized.lastUpdatedAt,
-        dateRange: normalized.dateRange,
+        total: combinedRows.length,
+        source: dataSource,
+        lastUpdatedAt,
+        dateRange: { start_date: startDate, end_date: endDate },
+        filesSeen: fileCount,
       });
+      if (skippedFiles.length) {
+        setSearchExplorerError(`${skippedFiles.length} source file(s) could not be read. Some records may be missing. Check the Lambda logs.`);
+      }
     } catch (e) {
       setSearchExplorerItems([]);
       setSearchExplorerColumns([]);
-      setSearchExplorerMeta({ total: 0, source: "", lastUpdatedAt: "", dateRange: null });
       setSearchExplorerError(e?.message || "Failed to load website searches");
     } finally {
+      setSearchExplorerFetchProgress(null);
       setSearchExplorerLoading(false);
     }
+  }
+
+  function applyWebsiteSearchDates() {
+    loadWebsiteSearches({ startDate: searchExplorerFromDate, endDate: searchExplorerToDate });
+  }
+
+  function resetWebsiteSearchDates() {
+    const startDate = websiteSearchLocalDay(29);
+    const endDate = websiteSearchLocalDay(0);
+    setSearchExplorerFromDate(startDate);
+    setSearchExplorerToDate(endDate);
+    loadWebsiteSearches({ startDate, endDate });
   }
 
   async function updateGoogleAdsDetails() {
@@ -6034,6 +6150,14 @@ export default function App() {
                 summary={searchExplorerSummary}
                 loading={searchExplorerLoading}
                 error={searchExplorerError}
+                dateFrom={searchExplorerFromDate}
+                setDateFrom={setSearchExplorerFromDate}
+                dateTo={searchExplorerToDate}
+                setDateTo={setSearchExplorerToDate}
+                appliedRange={searchExplorerAppliedRange}
+                fetchProgress={searchExplorerFetchProgress}
+                applyDates={applyWebsiteSearchDates}
+                resetDates={resetWebsiteSearchDates}
                 search={searchExplorerSearch}
                 setSearch={setSearchExplorerSearch}
                 groupBy={searchExplorerGroupBy}
@@ -10526,6 +10650,14 @@ function WebsiteSearchesPanel({
   summary,
   loading,
   error,
+  dateFrom,
+  setDateFrom,
+  dateTo,
+  setDateTo,
+  appliedRange,
+  fetchProgress,
+  applyDates,
+  resetDates,
   search,
   setSearch,
   groupBy,
@@ -10628,9 +10760,36 @@ function WebsiteSearchesPanel({
           </div>
         </div>
         <div className="rowActions">
-          <button className="btnSecondary" onClick={loadWebsiteSearches} type="button" disabled={loading}>
+          <button className="btnSecondary" onClick={() => loadWebsiteSearches()} type="button" disabled={loading}>
             {loading ? "Refreshing…" : "Refresh searches"}
           </button>
+        </div>
+      </div>
+
+      <div className="card" style={{ marginTop: 14, padding: 14, background: "rgba(255,255,255,0.035)", border: "1px solid rgba(255,255,255,0.10)" }}>
+        <div className="mutedSmall" style={{ marginBottom: 10 }}>Search history date range — last 30 days by default, both dates inclusive</div>
+        <div style={{ display: "flex", gap: 12, flexWrap: "wrap", alignItems: "end" }}>
+          <label style={{ display: "grid", gap: 5, minWidth: 160, flex: "1 1 160px" }}>
+            <span className="mutedSmall">From date</span>
+            <input className="input inputSm" type="date" value={dateFrom} max={websiteSearchLocalDay()} onChange={(e) => setDateFrom(e.target.value)} />
+          </label>
+          <label style={{ display: "grid", gap: 5, minWidth: 160, flex: "1 1 160px" }}>
+            <span className="mutedSmall">To date</span>
+            <input className="input inputSm" type="date" value={dateTo} min={dateFrom || undefined} max={websiteSearchLocalDay()} onChange={(e) => setDateTo(e.target.value)} />
+          </label>
+          <button className="btnPrimary" type="button" onClick={applyDates} disabled={loading || !dateFrom || !dateTo || dateFrom > dateTo || dateTo > websiteSearchLocalDay()}>
+            Apply dates
+          </button>
+          <button className="btnSecondary" type="button" onClick={resetDates} disabled={loading}>
+            Last 30 days
+          </button>
+        </div>
+        <div className="mutedSmall" style={{ marginTop: 9 }} role="status" aria-live="polite">
+          {loading && fetchProgress
+            ? `Loading date window ${fetchProgress.current} of ${fetchProgress.total}…`
+            : appliedRange
+            ? `Showing ${appliedRange.startDate} through ${appliedRange.endDate} (inclusive)`
+            : "Default period: last 30 days including today"}
         </div>
       </div>
 
@@ -10726,11 +10885,11 @@ function WebsiteSearchesPanel({
         </div>
       ) : null}
 
-      {!loading && !items.length ? (
+      {!loading && !error && !items.length ? (
         <div className="empty fancyEmpty" style={{ marginTop: 12 }}>
           <div className="emptyIcon">🧾</div>
-          <div className="emptyTitle">No website searches found</div>
-          <div className="mutedSmall">Add VITE_WEBSITE_SEARCHES_API in Amplify, or point it temporarily to the existing Traffic Intelligence API if that response includes website_searches.</div>
+          <div className="emptyTitle">No website searches in this period</div>
+          <div className="mutedSmall">Select a different date range to retrieve records from the dedicated S3 search-log API.</div>
         </div>
       ) : null}
 
